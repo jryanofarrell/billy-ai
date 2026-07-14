@@ -18,6 +18,26 @@ provider-agnostic LLM boundary, and local persistent run state.
 | `src/parts_parser/pdf/pages.py` | Sends the per-page extraction prompt and returns parts/subcategory/skip for each page. Prompt lives here. |
 | `src/parts_parser/pdf/validate.py` | Drops parts whose number isn't found in the page text, deduplicates, assigns sequence, and reports totals/drops/dupes. |
 | `src/parts_parser/pdf/pipeline.py` | Orchestrates the full PDF run: cache lookup, extraction, TOC parse, per-page AI calls, validation, filter matching, and `record_run`. |
+| `src/parts_parser/web/` | Provides the throttled Playwright browser session, Insite/Optimizely API adapter, and filter-or-crawl web pipeline. |
+
+## Insite endpoint facts
+
+- `GET /api/v1/websites/current?expand=languages%2Ccurrencies` detects an
+  Insite site from an object containing `id` or `websiteId`.
+- `GET /api/v1/categories/?maxDepth=3&includeStartCategory=false` returns the
+  category tree.
+- `GET /api/v2/products?categoryId=<id>&page=<n>&pageSize=48&expand=attributes`
+  lists one leaf category; follow `pagination.numberOfPages`.
+- `GET /api/v2/products?search=<term>&expand=attributes&pageSize=48` searches
+  products for filter mode.
+- `GET /api/v2/products/<guid>?expand=attributes` returns a product directly
+  at the top level, not inside a `products` collection; it is also the cached
+  site-config probe.
+- `GET /api/v1/catalogpages?path=%2Fproduct%2F<url-segment>` returns
+  `breadCrumbs` for filter-mode category fields; discard the `Home` crumb.
+- Products attach to leaf categories. Intermediate category IDs can return no
+  products because those pages are navigation tile fan-outs, so crawl the tree
+  and request products only for nodes without `subCategories`.
 
 ## App-data layout
 

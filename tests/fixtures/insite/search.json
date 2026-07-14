@@ -1,0 +1,31 @@
+{
+  "products": [
+    {
+      "productNumber": "28002",
+      "id": "prod-2",
+      "urlSegment": "28002-segment",
+      "attributeTypes": [
+        {
+          "label": "Material",
+          "attributeValues": [{"valueDisplay": "Brass"}]
+        }
+      ]
+    },
+    {
+      "productNumber": "28002-LF",
+      "id": "prod-2lf",
+      "urlSegment": "28002-lf-segment",
+      "attributeTypes": []
+    },
+    {
+      "productNumber": "128002",
+      "id": "prod-128002",
+      "urlSegment": "128002-segment",
+      "attributeTypes": []
+    }
+  ],
+  "pagination": {
+    "numberOfPages": 1,
+    "page": 1
+  }
+}

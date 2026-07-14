@@ -1,0 +1,20 @@
+{
+  "productNumber": "28002",
+  "id": "prod-2",
+  "urlSegment": "28002-segment",
+  "attributeTypes": [
+    {
+      "label": "Material",
+      "attributeValues": [
+        {"valueDisplay": "Brass"}
+      ]
+    },
+    {
+      "label": "Size",
+      "attributeValues": [
+        {"valueDisplay": "1/2\""},
+        {"valueDisplay": "3/4\""}
+      ]
+    }
+  ]
+}
