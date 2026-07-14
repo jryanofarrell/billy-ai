@@ -9,6 +9,9 @@ provider-agnostic LLM boundary, and local persistent run state.
 |---|---|
 | `src/parts_parser/config.py` | Loads and saves user settings and resolves the OS app-data directory. |
 | `src/parts_parser/llm.py` | Defines the provider-agnostic LLM interface and the configured OpenAI implementation. |
+| `src/parts_parser/models.py` | Defines the shared `PartRecord` output model. |
+| `src/parts_parser/output/filtering.py` | Loads part-number filter workbooks, normalizes keys for matching, and reports exact, normalized, collision, and unmatched results. |
+| `src/parts_parser/output/excel.py` | Writes PDF- and web-mode parts workbooks and optional match-report sheets. |
 | `src/parts_parser/store.py` | Persists site configs, PDF results, and run history, and computes file hashes. |
 
 ## App-data layout
@@ -34,6 +37,20 @@ PartsParser/
 
 Tests can set `PARTS_PARSER_DATA_DIR` to redirect all default app-data access
 to a temporary directory.
+
+## Output workbook shape
+
+Every output workbook has a `Parts` sheet. PDF mode uses `Part No`, `Category`,
+`Subcategory`, `Series`, `Description`, and `Sequence`; web mode uses `Part No`,
+`Category`, `Subcategory`, and `Series`, followed by the alphabetized union of
+attribute labels across all parts. Missing web attributes are written as blank
+cells, and source part numbers are preserved exactly.
+
+When filter matching is requested, the workbook also has a `Match Report`
+sheet. Its first row identifies the filter column used, followed by one row per
+filter entry under `Filter Value`, `Match Type`, `Matched Part No`, and `Note`.
+Match types are exact, normalized, collision, or unmatched; collision rows list
+all candidates rather than selecting one.
 
 ## Design references
 

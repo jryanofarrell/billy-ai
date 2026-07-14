@@ -5,6 +5,7 @@ description = "Parses plumbing-parts websites and catalog PDFs into Excel workbo
 requires-python = ">=3.12"
 dependencies = [
     "openai>=1.0",
+    "openpyxl>=3.1",
     "platformdirs>=4.0",
 ]
 
