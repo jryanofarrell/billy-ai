@@ -13,6 +13,11 @@ provider-agnostic LLM boundary, and local persistent run state.
 | `src/parts_parser/output/filtering.py` | Loads part-number filter workbooks, normalizes keys for matching, and reports exact, normalized, collision, and unmatched results. |
 | `src/parts_parser/output/excel.py` | Writes PDF- and web-mode parts workbooks and optional match-report sheets. |
 | `src/parts_parser/store.py` | Persists site configs, PDF results, and run history, and computes file hashes. |
+| `src/parts_parser/pdf/extract.py` | Extracts per-page text from a PDF via `pypdf`; classifies pages as digital or scanned. |
+| `src/parts_parser/pdf/toc.py` | Detects TOC pages by dotted-leader density and parses them into ordered sections via one `complete_json` call. Prompt lives here. |
+| `src/parts_parser/pdf/pages.py` | Sends the per-page extraction prompt and returns parts/subcategory/skip for each page. Prompt lives here. |
+| `src/parts_parser/pdf/validate.py` | Drops parts whose number isn't found in the page text, deduplicates, assigns sequence, and reports totals/drops/dupes. |
+| `src/parts_parser/pdf/pipeline.py` | Orchestrates the full PDF run: cache lookup, extraction, TOC parse, per-page AI calls, validation, filter matching, and `record_run`. |
 
 ## App-data layout
 
@@ -30,8 +35,11 @@ PartsParser/
 - `settings.json` stores the local API key and model setting. A non-empty
   `OPENAI_API_KEY` environment variable takes precedence when settings load.
 - `site_configs/` stores one JSON file per normalized domain.
-- `pdf_cache/` stores parsed parts in JSON files keyed by the source PDF's
-  SHA-256 hash.
+- `pdf_cache/` stores parsed results in JSON files keyed by the source PDF's
+  SHA-256 hash. Each cache file has the shape
+  `{"parts": [...], "validation": {...}}` where `parts` is the list of raw
+  `PartRecord`-compatible dicts and `validation` holds the summary counts
+  (totals, skipped pages, drops, duplicates).
 - `runs.jsonl` is append-only run history; each record receives an ID and UTC
   timestamp.
 

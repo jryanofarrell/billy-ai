@@ -46,14 +46,14 @@ class RunStore:
         with path.open("w", encoding="utf-8") as config_file:
             json.dump(config, config_file, indent=2)
 
-    def get_pdf_cache(self, file_hash: str) -> list[dict] | None:
+    def get_pdf_cache(self, file_hash: str) -> dict | list | None:
         path = self.pdf_cache_dir / f"{file_hash}.json"
         if not path.exists():
             return None
         with path.open(encoding="utf-8") as cache_file:
             return json.load(cache_file)
 
-    def save_pdf_cache(self, file_hash: str, parts: list[dict]) -> None:
+    def save_pdf_cache(self, file_hash: str, parts: dict | list) -> None:
         path = self.pdf_cache_dir / f"{file_hash}.json"
         with path.open("w", encoding="utf-8") as cache_file:
             json.dump(parts, cache_file, indent=2)

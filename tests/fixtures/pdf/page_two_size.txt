@@ -1,0 +1,15 @@
+SECTION C COMPRESSION ELBOWS
+
+90 DEG ELBOW Male JIC To Male Pipe
+
+Tube   Part No.   Description
+1/4    XX-200-A   Tube 1/4 Pipe 1/4 NPT
+1/2    XX-201-A   Tube 1/2 Pipe 3/8 NPT
+
+STRAIGHT UNION
+
+Tube   Part No.   Description
+1/4    XX-210-A   Tube 1/4
+3/8    XX-211-A   Tube 3/8
+
+Complies with ASME B16.26 for tube to pipe applications.
