@@ -11,10 +11,26 @@ email-native order agent) is deferred indefinitely — do not build toward it.
 
 ## Status
 
-Greenfield. No code yet — the planning doc and the first scaffold ticket
-define the stack and layout. Whoever lands the scaffold ticket must update
-this file (build/run commands, directory map) and create
-`.ai/context/core.md` in the same PR.
+The initial Python package scaffold is in place. Set up and check the project
+from the repository root:
+
+```sh
+uv sync
+uv run pytest
+uv run ruff check .
+```
+
+Directory map:
+
+- `src/parts_parser/` — package code: settings, LLM client, and run store
+- `tests/` — pytest coverage for the scaffold
+- `docs/` — product and architecture planning
+- `.ai/rules/` — always-applicable project constraints
+- `.ai/context/` — snapshots of the implementation for cold sessions
+- `.ai/recipes/` — repeatable development procedures
+
+This remains a greenfield product; future tickets that materially change an
+area must update its context file in the same PR.
 
 ## Read first
 
