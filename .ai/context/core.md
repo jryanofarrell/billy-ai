@@ -19,6 +19,8 @@ provider-agnostic LLM boundary, and local persistent run state.
 | `src/parts_parser/pdf/validate.py` | Drops parts whose number isn't found in the page text, deduplicates, assigns sequence, and reports totals/drops/dupes. |
 | `src/parts_parser/pdf/pipeline.py` | Orchestrates the full PDF run: cache lookup, extraction, TOC parse, per-page AI calls, validation, filter matching, and `record_run`. |
 | `src/parts_parser/web/` | Provides the throttled Playwright browser session, Insite/Optimizely API adapter, and filter-or-crawl web pipeline. |
+| `src/parts_parser/gui/` | Provides the PySide6 desktop UI: source and optional-filter drop zones, saved settings dialog, main-window pipeline controls, and background worker wiring for web and PDF runs. |
+| `src/parts_parser/__main__.py` | Creates the Qt application and opens the `Parts Catalog Parser` window; launch it with `python -m parts_parser`. |
 
 ## Insite endpoint facts
 
@@ -79,6 +81,13 @@ sheet. Its first row identifies the filter column used, followed by one row per
 filter entry under `Filter Value`, `Match Type`, `Matched Part No`, and `Note`.
 Match types are exact, normalized, collision, or unmatched; collision rows list
 all candidates rather than selecting one.
+
+## Output path convention
+
+Web runs write `<domain>-parts.xlsx` to the user's `Downloads` directory. PDF
+runs write `<pdf-stem>-parts.xlsx` beside the source PDF. If the chosen path
+already exists, the app preserves it and selects the next available path by
+adding ` (2)`, ` (3)`, and so on before the `.xlsx` extension.
 
 ## Design references
 

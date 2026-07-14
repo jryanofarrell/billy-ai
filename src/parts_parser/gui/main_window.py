@@ -1,0 +1,198 @@
+"""Main window for the parts catalog parser desktop application."""
+
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QAction, QDesktopServices
+from PySide6.QtWidgets import (
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from parts_parser.gui.drop_zone import DropZone
+from parts_parser.gui.settings_dialog import SettingsDialog
+from parts_parser.gui.worker import PipelineWorker
+
+
+class MainWindow(QMainWindow):
+    """Present source selection and run controls for both parser pipelines."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._worker: PipelineWorker | None = None
+        self._output_path: str | None = None
+
+        self.setWindowTitle("Parts Catalog Parser")
+        self.setFixedWidth(560)
+
+        central_widget = QWidget(self)
+        layout = QVBoxLayout(central_widget)
+
+        source_group = QGroupBox("Source", central_widget)
+        source_layout = QVBoxLayout(source_group)
+        source_layout.addWidget(QLabel("Website address:", source_group))
+        self.url_edit = QLineEdit(source_group)
+        self.url_edit.setPlaceholderText("https://example.com")
+        source_layout.addWidget(self.url_edit)
+
+        or_label = QLabel("— or —", source_group)
+        or_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        or_label.setStyleSheet("color: gray;")
+        source_layout.addWidget(or_label)
+
+        self.pdf_zone = DropZone(
+            extensions=(".pdf",),
+            prompt="Drop a catalog PDF here, or click to browse",
+            parent=source_group,
+        )
+        source_layout.addWidget(self.pdf_zone)
+        layout.addWidget(source_group)
+
+        filter_group = QGroupBox(
+            "Only include parts from a list (optional)", central_widget
+        )
+        filter_layout = QVBoxLayout(filter_group)
+        self.filter_zone = DropZone(
+            extensions=(".xlsx", ".xls"),
+            prompt="Drop an Excel part list here, or click to browse",
+            parent=filter_group,
+        )
+        filter_layout.addWidget(self.filter_zone)
+        layout.addWidget(filter_group)
+
+        button_layout = QHBoxLayout()
+        self.run_button = QPushButton("Run", central_widget)
+        self.run_button.setEnabled(False)
+        button_layout.addWidget(self.run_button)
+        self.cancel_button = QPushButton("Cancel", central_widget)
+        self.cancel_button.hide()
+        button_layout.addWidget(self.cancel_button)
+        layout.addLayout(button_layout)
+
+        self.progress_bar = QProgressBar(central_widget)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        layout.addWidget(self.progress_bar)
+
+        status_layout = QHBoxLayout()
+        self.status_label = QLabel("Ready", central_widget)
+        status_layout.addWidget(self.status_label, 1)
+        self.open_button = QPushButton("Open", central_widget)
+        self.open_button.hide()
+        status_layout.addWidget(self.open_button)
+        layout.addLayout(status_layout)
+
+        self.setCentralWidget(central_widget)
+        self._create_menu()
+
+        self.url_edit.textEdited.connect(self._url_edited)
+        self.pdf_zone.fileSelected.connect(self._pdf_selected)
+        self.pdf_zone.cleared.connect(self._update_run_enabled)
+        self.run_button.clicked.connect(self._start_run)
+        self.cancel_button.clicked.connect(self._cancel_run)
+        self.open_button.clicked.connect(self._open_output)
+
+    def _create_menu(self) -> None:
+        file_menu = self.menuBar().addMenu("File")
+        settings_action = QAction("Settings…", self)
+        settings_action.triggered.connect(self._open_settings)
+        file_menu.addAction(settings_action)
+        file_menu.addSeparator()
+        quit_action = QAction("Quit", self)
+        quit_action.triggered.connect(self.close)
+        file_menu.addAction(quit_action)
+
+    def _open_settings(self) -> None:
+        SettingsDialog(self).exec()
+
+    def _url_edited(self, text: str) -> None:
+        if text.strip():
+            self.pdf_zone.clear()
+        self._update_run_enabled()
+
+    def _pdf_selected(self, _path: str) -> None:
+        self.url_edit.clear()
+        self._update_run_enabled()
+
+    def _update_run_enabled(self) -> None:
+        has_url = bool(self.url_edit.text().strip())
+        has_pdf = self.pdf_zone.path is not None
+        self.run_button.setEnabled((has_url != has_pdf) and self._worker is None)
+
+    def _start_run(self) -> None:
+        url = self.url_edit.text().strip() or None
+        pdf_path = self.pdf_zone.path
+        if (url is None) == (pdf_path is None):
+            return
+
+        self.open_button.hide()
+        self.status_label.setText("Starting…")
+        self.progress_bar.setRange(0, 0)
+        self._set_inputs_enabled(False)
+        self.cancel_button.show()
+
+        worker = PipelineWorker(
+            url=url,
+            pdf_path=pdf_path,
+            filter_path=self.filter_zone.path,
+            parent=self,
+        )
+        self._worker = worker
+        worker.progressed.connect(self._show_progress)
+        worker.succeeded.connect(self._run_succeeded)
+        worker.failed.connect(self._run_failed)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _cancel_run(self) -> None:
+        if self._worker is not None:
+            self._worker.cancel()
+            self.cancel_button.setEnabled(False)
+            self.status_label.setText("Cancelling…")
+
+    def _show_progress(self, message: str, percent: int) -> None:
+        self.status_label.setText(message)
+        if percent < 0:
+            self.progress_bar.setRange(0, 0)
+        else:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(percent)
+
+    def _run_succeeded(self, path: str, part_count: int) -> None:
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(100)
+        self.status_label.setText(f"Done — {part_count:,} parts")
+        self._configure_open_button(path)
+        self._finish_run()
+
+    def _run_failed(self, message: str) -> None:
+        self.status_label.setText("Couldn't finish")
+        QMessageBox.warning(self, "Couldn't finish", message)
+        self._finish_run()
+
+    def _configure_open_button(self, path: str) -> None:
+        self._output_path = path
+        self.open_button.show()
+
+    def _open_output(self) -> None:
+        if self._output_path is not None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self._output_path))
+
+    def _finish_run(self) -> None:
+        self._worker = None
+        self._set_inputs_enabled(True)
+        self.cancel_button.setEnabled(True)
+        self.cancel_button.hide()
+        self._update_run_enabled()
+
+    def _set_inputs_enabled(self, enabled: bool) -> None:
+        self.url_edit.setEnabled(enabled)
+        self.pdf_zone.setEnabled(enabled)
+        self.filter_zone.setEnabled(enabled)
+        self.run_button.setEnabled(enabled)
