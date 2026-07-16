@@ -1,5 +1,7 @@
 """Main window for the parts catalog parser desktop application."""
 
+from pathlib import Path
+
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
@@ -20,6 +22,15 @@ from parts_parser.gui.drop_zone import DropZone
 from parts_parser.gui.settings_dialog import SettingsDialog
 from parts_parser.gui.source_panels import PdfPanel, UrlPanel
 from parts_parser.gui.worker import PipelineWorker
+
+
+def _display_path(path: str) -> str:
+    """Shorten an output path for the status line, using ~ for the home dir."""
+    p = Path(path)
+    try:
+        return f"~/{p.relative_to(Path.home())}"
+    except ValueError:
+        return str(p)
 
 
 class MainWindow(QMainWindow):
@@ -165,7 +176,8 @@ class MainWindow(QMainWindow):
     def _run_succeeded(self, path: str, part_count: int) -> None:
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(100)
-        self.status_label.setText(f"Done — {part_count:,} parts")
+        self.status_label.setText(f"Done — {part_count:,} parts · saved to {_display_path(path)}")
+        self.status_label.setToolTip(path)
         self._configure_open_button(path)
         self._finish_run()
 
