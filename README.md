@@ -62,5 +62,12 @@ uv run pytest          # test suite (no network, no real browser)
 uv run ruff check .    # lint
 ```
 
+Live-reload while working on the GUI — restarts the app whenever a file under
+`src/` is saved (development only; end users get the frozen build):
+
+```bash
+uvx watchfiles 'python -m parts_parser' src
+```
+
 Windows distributable: `uv run python scripts/build.py` on Windows, or the `build`
 GitHub Actions workflow — see [`docs/BUILD.md`](docs/BUILD.md).
