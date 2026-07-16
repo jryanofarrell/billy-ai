@@ -42,17 +42,29 @@ class BrowserSession:
 
     def get_json(self, url: str) -> dict:
         assert self._context is not None, "Call __enter__ first"
-        elapsed = time.monotonic() - self._last_request
-        if elapsed < self._min_interval:
-            time.sleep(self._min_interval - elapsed)
-        self._last_request = time.monotonic()
-        resp = self._context.request.get(url)
-        if resp.status != 200:
-            raise WebError(f"The website returned an error (HTTP {resp.status}).")
-        try:
-            return resp.json()
-        except Exception:
-            raise WebError("The website sent an unexpected response.")
+        last_error: WebError | None = None
+        for attempt in range(3):
+            if attempt:
+                time.sleep(attempt)  # 1s, then 2s backoff before retrying
+            elapsed = time.monotonic() - self._last_request
+            if elapsed < self._min_interval:
+                time.sleep(self._min_interval - elapsed)
+            self._last_request = time.monotonic()
+            try:
+                resp = self._context.request.get(url)
+            except Exception:
+                # Transient transport failure (timeout, dropped socket) — retry.
+                last_error = WebError("The website stopped responding.")
+                continue
+            if resp.status == 200:
+                try:
+                    return resp.json()
+                except Exception:
+                    raise WebError("The website sent an unexpected response.")
+            last_error = WebError(f"The website returned an error (HTTP {resp.status}).")
+            if resp.status not in (429, 500, 502, 503, 504):
+                raise last_error  # deterministic failure — retrying won't help
+        raise last_error
 
     def __exit__(
         self,

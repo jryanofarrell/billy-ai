@@ -5,7 +5,9 @@ from typing import Any
 from parts_parser.models import PartRecord
 from parts_parser.web.session import WebError
 
-PAGE_SIZE = 48
+# Insite's server clamps pageSize to 64 (verified against the live API —
+# requests for 250/500 come back with pagination.pageSize == 64).
+PAGE_SIZE = 64
 
 
 def detect(session: Any, base: str) -> bool:
