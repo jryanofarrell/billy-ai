@@ -14,13 +14,8 @@ from parts_parser.web.pipeline import run_web
 from parts_parser.web.session import WebError
 
 
-def output_path_for(source: str, *, is_url: bool) -> Path:
-    if is_url:
-        domain = urlparse(source).netloc
-        candidate = Path.home() / "Downloads" / f"{domain}-parts.xlsx"
-    else:
-        pdf_path = Path(source)
-        candidate = Path.home() / "Downloads" / f"{pdf_path.stem}-parts.xlsx"
+def output_path_for(name: str) -> Path:
+    candidate = Path.home() / "Downloads" / f"{name}-parts.xlsx"
 
     if not candidate.exists():
         return candidate
@@ -98,7 +93,7 @@ class PipelineWorker(QThread):
             progress=progress,
             cancel=self._cancel,
         )
-        return result, output_path_for(self._url, is_url=True)
+        return result, output_path_for(urlparse(self._url).netloc)
 
     def _run_pdf_job(self, store, filter_sheet, progress):
         result = run_pdf(
@@ -108,4 +103,4 @@ class PipelineWorker(QThread):
             progress=progress,
             cancel=self._cancel,
         )
-        return result, output_path_for(self._pdf_path, is_url=False)
+        return result, output_path_for(Path(self._pdf_path).stem)

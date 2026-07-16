@@ -10,21 +10,12 @@ from parts_parser.gui.worker import PipelineWorker, output_path_for  # noqa: E40
 from parts_parser.pdf.extract import PdfError  # noqa: E402
 
 
-def test_output_path_for_url_uses_downloads_and_domain(tmp_path, monkeypatch):
+def test_output_path_for_uses_downloads_and_name(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
 
-    output_path = output_path_for("https://catalog.example.com/products/fittings", is_url=True)
+    output_path = output_path_for("catalog.example.com")
 
     assert output_path == tmp_path / "Downloads" / "catalog.example.com-parts.xlsx"
-
-
-def test_output_path_for_pdf_uses_downloads_and_stem(tmp_path, monkeypatch):
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    pdf_path = tmp_path / "somewhere else" / "synthetic catalog.pdf"
-
-    output_path = output_path_for(str(pdf_path), is_url=False)
-
-    assert output_path == tmp_path / "Downloads" / "synthetic catalog-parts.xlsx"
 
 
 def test_output_path_for_uses_next_available_collision_number(tmp_path, monkeypatch):
@@ -33,9 +24,9 @@ def test_output_path_for_uses_next_available_collision_number(tmp_path, monkeypa
     (downloads / "example.com-parts.xlsx").touch()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
 
-    second_path = output_path_for("https://example.com/catalog", is_url=True)
+    second_path = output_path_for("example.com")
     second_path.touch()
-    third_path = output_path_for("https://example.com/catalog", is_url=True)
+    third_path = output_path_for("example.com")
 
     assert second_path == downloads / "example.com-parts (2).xlsx"
     assert third_path == downloads / "example.com-parts (3).xlsx"
