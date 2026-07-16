@@ -66,7 +66,7 @@ Live-reload while working on the GUI — restarts the app whenever a file under
 `src/` is saved (development only; end users get the frozen build):
 
 ```bash
-uvx watchfiles 'python -m parts_parser' src
+uv run --with watchfiles watchfiles 'python -m parts_parser' src
 ```
 
 Windows distributable: `uv run python scripts/build.py` on Windows, or the `build`
