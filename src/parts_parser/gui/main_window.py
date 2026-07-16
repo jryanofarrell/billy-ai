@@ -174,25 +174,34 @@ class MainWindow(QMainWindow):
         else:
             age = f"{days_ago} days ago"
 
-        completeness = "partial " if not info.complete else ""
         estimate = (
             f"{ceil(info.estimated_crawl_seconds / 60)} minutes"
             if info.estimated_crawl_seconds is not None
             else "a while"
         )
-        text = (
-            f"I have {completeness}data for this website from {age} "
-            f"({info.part_count:,} parts).\n\n"
-            f"Re-downloading takes about {estimate}."
-        )
+        if info.complete:
+            text = (
+                f"I have data for this website from {age} "
+                f"({info.part_count:,} parts).\n\n"
+                f"Re-downloading takes about {estimate}."
+            )
+            use_saved_label = "Use saved data"
+            fresh_label = "Get fresh data"
+        else:
+            text = (
+                f"I have partial data from {age} ({info.part_count:,} parts). "
+                f"Use it to finish the remaining ~{estimate}, or start fresh?"
+            )
+            use_saved_label = "Use saved & finish"
+            fresh_label = "Start fresh"
         box = QMessageBox(self)
         box.setWindowTitle("Use saved website data?")
         box.setText(text)
         box.setIcon(QMessageBox.Icon.Question)
         use_saved_btn = box.addButton(
-            "Use saved data", QMessageBox.ButtonRole.AcceptRole
+            use_saved_label, QMessageBox.ButtonRole.AcceptRole
         )
-        box.addButton("Get fresh data", QMessageBox.ButtonRole.RejectRole)
+        box.addButton(fresh_label, QMessageBox.ButtonRole.RejectRole)
         box.setDefaultButton(use_saved_btn)
         box.exec()
         if self._worker is not None:

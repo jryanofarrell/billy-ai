@@ -91,6 +91,18 @@ class ListingFailureSession(FakeSession):
         return super().get_json(url)
 
 
+class CancelAfterProductSession(FakeSession):
+    def __init__(self, *args, cancel: threading.Event, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.cancel = cancel
+
+    def get_html(self, url: str) -> str:
+        html = super().get_html(url)
+        if "/products/" in url:
+            self.cancel.set()
+        return html
+
+
 class FakeLLM:
     def __init__(self, responses: list[dict]) -> None:
         self.responses = responses
@@ -147,17 +159,32 @@ def _save_cache(
     parts: list[dict],
     *,
     complete: bool = True,
+    progress: list[str] | None = None,
     fetched_at: str = "2026-01-01T00:00:00+00:00",
 ) -> None:
-    store.save_web_cache(
-        "example.com",
-        {
-            "fetched_at": fetched_at,
-            "crawl_seconds": 120.0,
-            "complete": complete,
-            "parts": parts,
-        },
+    payload = {
+        "fetched_at": fetched_at,
+        "crawl_seconds": 120.0,
+        "complete": complete,
+        "parts": parts,
+    }
+    if progress is not None:
+        payload["progress"] = progress
+    store.save_web_cache("example.com", payload)
+
+
+def _generic_sitemap_fixture() -> tuple[list[str], str, dict[str, str]]:
+    urls = [f"https://example.com/products/P-{index}" for index in range(1, 4)]
+    sitemap = (
+        "<urlset>"
+        + "".join(f"<url><loc>{url}</loc></url>" for url in urls)
+        + "</urlset>"
     )
+    html = {
+        url: f'<div class="part-number">P-{index}</div>'
+        for index, url in enumerate(urls, 1)
+    }
+    return urls, sitemap, html
 
 
 def _discovery_fixture() -> tuple[FakeSession, FakeLLM]:
@@ -262,19 +289,40 @@ def test_cache_hit_without_hook_reuses_cache(tmp_path):
     assert [part.part_no for part in result.parts] == ["SAVED-1"]
 
 
-def test_incomplete_cache_filter_result_has_unmatched_data_notice(tmp_path):
+def test_incomplete_cache_reuse_fetches_only_remaining_units_and_upgrades_cache(
+    tmp_path,
+):
     store = RunStore(root=tmp_path)
-    _save_cache(store, [_cached_part("FOUND")], complete=False)
+    store.save_site_config("example.com", _generic_config().to_dict())
+    urls, sitemap, html = _generic_sitemap_fixture()
+    _save_cache(
+        store,
+        [_cached_part("P-1")],
+        complete=False,
+        progress=[urls[0]],
+    )
+    session = FakeSession(
+        html={urls[1]: html[urls[1]], urls[2]: html[urls[2]]},
+        text={"https://example.com/sitemap.xml": sitemap},
+    )
 
     result = run_web(
         "https://example.com",
         store=store,
-        filter_sheet=_filter_sheet("FOUND", "NOT-FOUND"),
-        session_factory=lambda: (_ for _ in ()).throw(AssertionError("session created")),
+        session_factory=_factory(session),
+        choose_cached=lambda info: True,
     )
 
-    assert result.notices
-    assert "unmatched parts may simply not have been downloaded yet" in result.notices[0]
+    assert urls[0] not in session.calls
+    assert [url for url in urls if url in session.calls] == urls[1:]
+    assert {part.part_no for part in result.parts} == {"P-1", "P-2", "P-3"}
+    assert result.progress == urls
+    cache = store.get_web_cache("example.com")
+    assert cache is not None
+    assert cache["complete"] is True
+    assert "progress" not in cache
+    assert {part["part_no"] for part in cache["parts"]} == {"P-1", "P-2", "P-3"}
+    assert store.list_runs()[0]["data_source"] == "cache+resume"
 
 
 def test_filter_mode_keeps_only_normalized_equal_hits(tmp_path, search_data, catalogpages_data):
@@ -612,6 +660,76 @@ def test_refresh_replaces_cache_and_records_live_source(
     assert [part["part_no"] for part in cache["parts"]] == [
         part.part_no for part in result.parts
     ]
+    assert store.list_runs()[0]["data_source"] == "live"
+
+
+def test_resumed_crawl_stopped_again_unions_progress_and_preserves_parts(tmp_path):
+    store = RunStore(root=tmp_path)
+    store.save_site_config("example.com", _generic_config().to_dict())
+    urls, sitemap, html = _generic_sitemap_fixture()
+    prior_parts = [_cached_part("P-1")]
+    _save_cache(store, prior_parts, complete=False, progress=[urls[0]])
+    cancel = threading.Event()
+    session = CancelAfterProductSession(
+        html={urls[1]: html[urls[1]]},
+        text={"https://example.com/sitemap.xml": sitemap},
+        cancel=cancel,
+    )
+
+    result = run_web(
+        "https://example.com",
+        store=store,
+        cancel=cancel,
+        session_factory=_factory(session),
+        choose_cached=lambda info: True,
+    )
+
+    assert urls[0] not in session.calls
+    assert urls[1] in session.calls
+    assert urls[2] not in session.calls
+    assert result.stopped_early is not None
+    assert result.progress == urls[:2]
+    assert {part.part_no for part in result.parts} == {"P-1", "P-2"}
+    cache = store.get_web_cache("example.com")
+    assert cache is not None
+    assert cache["complete"] is False
+    assert cache["progress"] == urls[:2]
+    assert {part["part_no"] for part in cache["parts"]}.issuperset(
+        part["part_no"] for part in prior_parts
+    )
+    assert store.list_runs()[0]["data_source"] == "cache+resume"
+
+
+def test_get_fresh_ignores_partial_cache_progress_and_fetches_every_unit(tmp_path):
+    store = RunStore(root=tmp_path)
+    store.save_site_config("example.com", _generic_config().to_dict())
+    urls, sitemap, html = _generic_sitemap_fixture()
+    _save_cache(
+        store,
+        [_cached_part("STALE")],
+        complete=False,
+        progress=urls[:2],
+    )
+    session = FakeSession(
+        html=html,
+        text={"https://example.com/sitemap.xml": sitemap},
+    )
+
+    result = run_web(
+        "https://example.com",
+        store=store,
+        session_factory=_factory(session),
+        choose_cached=lambda info: False,
+    )
+
+    assert [url for url in urls if url in session.calls] == urls
+    assert {part.part_no for part in result.parts} == {"P-1", "P-2", "P-3"}
+    assert "STALE" not in {part.part_no for part in result.parts}
+    assert result.progress == urls
+    cache = store.get_web_cache("example.com")
+    assert cache is not None
+    assert cache["complete"] is True
+    assert "progress" not in cache
     assert store.list_runs()[0]["data_source"] == "live"
 
 

@@ -96,16 +96,15 @@ PartsParser/
   output; a later run reparses the file.
 - `web_cache/` stores one crawl per normalized domain with the shape
   `{"fetched_at": <UTC ISO timestamp>, "crawl_seconds": <seconds>,
-  "complete": <bool>, "parts": [...]}`. A later full-site collection replaces
-  the prior payload. Completed crawls set `complete: true`; crawls that stop
-  early, including enumeration that stops after finding every requested filter
-  entry, are still cached with the collected parts and `complete: false`.
-  Partial saved data is labeled in the GUI's saved-data choice. When it is used
-  for filtering, the result notice and GUI warning explain that unmatched entries
-  may simply not have been downloaded yet.
+  "complete": <bool>, "parts": [...], "progress": [...]}`. `progress` is present
+  only on an incomplete payload and lists the completed crawl unit keys. A later
+  full-site collection replaces the prior payload. Completed crawls set
+  `complete: true` and omit `progress`; crawls that stop early, including
+  enumeration that stops after finding every requested filter entry, retain the
+  collected parts with `complete: false` and their completed-unit progress.
 - `runs.jsonl` is append-only run history; each record receives an ID and UTC
   timestamp. Partial-run records also include their `stopped_early` reason, and
-  web records identify `data_source` as `cache` or `live`.
+  web records identify `data_source` as `cache`, `live`, or `cache+resume`.
 
 Tests can set `PARTS_PARSER_DATA_DIR` to redirect all default app-data access
 to a temporary directory.
@@ -116,6 +115,23 @@ When saved website data exists, the GUI shows its age, part count, completeness,
 and estimated re-crawl time, then defaults to using it. Headless runs also reuse
 saved data by default. Choosing fresh data performs a live crawl and replaces the
 saved payload.
+
+Complete and partial caches have different reuse behavior. Using a complete cache
+returns its parts without starting collection. Using a partial cache seeds the run
+with its saved parts and resumes collection with `skip_keys = set(progress)`, so
+completed units are not fetched again; the GUI describes this as finishing the
+remaining work, and the completed run reports that it topped up the saved data.
+If the resumed crawl completes, its replacement cache is complete and has no
+`progress`. If it stops again, the replacement remains incomplete, its parts
+include the prior saved parts, and `progress` is the union of previously and newly
+completed unit keys. Choosing fresh ignores either kind of cache, including any
+partial progress, and collects every unit again.
+
+Full-site collection is organized into independently resumable units. Insite uses
+the leaf category ID as its unit key and yields `(unit_key, records)` after each
+leaf category completes. Generic enumeration uses the product URL as its unit key;
+`run_generic` accepts `skip_keys` and records each completed URL. Both paths skip
+fetching keys supplied in `skip_keys`.
 
 Filter lists of at most 500 entries use per-part search when the site supports it
 and do not write a website cache. Larger lists perform full-site enumeration,
@@ -138,6 +154,11 @@ the collected records remain available, filter matching and its match report
 are computed against those partial records, and run history records the reason.
 Errors before usable collection still raise rather than becoming partial
 successes.
+
+`WebRunResult` also exposes `progress: list[str]`, containing the completed crawl
+unit keys. A full crawl lists every unit, while a stopped-early crawl lists only
+units that completed. On a resumed run this list includes both saved progress and
+units completed during the current attempt.
 
 For PDF runs, cancellation or an LLM failure during the page loop validates and
 returns parts from completed pages. Such parses are marked `complete: false` in

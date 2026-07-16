@@ -54,6 +54,8 @@ class PipelineWorker(QThread):
         self._preview_answer = False
         self._cache_decision_event = threading.Event()
         self._use_saved_cache = True
+        self._cached_data_info: CachedDataInfo | None = None
+        self._resuming_partial_cache = False
 
     def cancel(self) -> None:
         self._preview_answer = False
@@ -77,9 +79,13 @@ class PipelineWorker(QThread):
         return self._preview_answer
 
     def _choose_cached(self, info: CachedDataInfo) -> bool:
+        self._cached_data_info = info
         self._cache_decision_event.clear()
         self.cacheDecision.emit(info)
         self._cache_decision_event.wait()
+        self._resuming_partial_cache = self._use_saved_cache and not getattr(
+            info, "complete", True
+        )
         return self._use_saved_cache
 
     def run(self) -> None:
@@ -142,6 +148,20 @@ class PipelineWorker(QThread):
             confirm=self._confirm,
             choose_cached=self._choose_cached,
         )
+        if self._resuming_partial_cache and self._cached_data_info is not None:
+            existing = self._cached_data_info.part_count
+            domain = urlparse(self._url).netloc.lower()
+            updated_cache = store.get_web_cache(domain)
+            updated_count = (
+                len(updated_cache["parts"])
+                if updated_cache is not None
+                else len(result.parts)
+            )
+            added = max(0, updated_count - existing)
+            result.notices.append(
+                f"Topped up the saved data: added {added:,} parts to "
+                f"{existing:,} saved."
+            )
         return result, output_path_for(urlparse(self._url).netloc)
 
     def _run_pdf_job(self, store, filter_sheet, progress):
