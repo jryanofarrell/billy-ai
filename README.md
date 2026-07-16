@@ -19,18 +19,20 @@ uv run python -m parts_parser        # opens the GUI
 In the window: pick Website or PDF catalog, provide the address or drop the PDF,
 optionally drop an Excel part list to filter by, and hit Run. The output workbook
 lands in `~/Downloads` and contains a `Parts` sheet plus a `Match Report` sheet when
-a filter was supplied.
+a filter was supplied. On the first run against a new website, review the sample
+parts preview and confirm that they look right before the full parse continues.
 
 **API key:** PDF parsing calls an LLM (~$1–2 per catalog, once — results are cached by
 file hash). Set `OPENAI_API_KEY` or paste a key into Settings. Website runs against
-supported platforms use **no AI at all**.
+known sites use **no AI at all**; an unknown site's first run uses a few calls to
+learn its structure.
 
 ## What's supported today
 
 | Source | Works? | AI used |
 |---|---|---|
 | Websites on the Insite/Optimizely B2B commerce platform (e.g. midlandindustries.com — detection is automatic) | ✅ | none — the platform's JSON API is read directly |
-| Any other website | ❌ "isn't supported yet" | — (planned: one-time AI structure discovery that saves a reusable site config; see plan §4.3/§11) |
+| Any other website | ✅ | one-time AI structure discovery (a few LLM calls, once per site); deterministic thereafter; first run shows a preview to confirm |
 | Digital-text catalog PDFs (e.g. Fairview master catalog) | ✅ | one LLM call per page, once per unique file |
 | Scanned/image PDFs | ❌ detected and declined | — |
 

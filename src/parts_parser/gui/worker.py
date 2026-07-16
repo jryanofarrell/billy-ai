@@ -10,6 +10,7 @@ from parts_parser.output.filtering import OutputError, load_filter_sheet
 from parts_parser.pdf.extract import PdfError
 from parts_parser.pdf.pipeline import run_pdf
 from parts_parser.store import RunStore
+from parts_parser.web.generic import PartRecord as GenericPartRecord
 from parts_parser.web.pipeline import run_web
 from parts_parser.web.session import WebError
 
@@ -32,6 +33,7 @@ class PipelineWorker(QThread):
     progressed = Signal(str, int)
     succeeded = Signal(str, int)
     failed = Signal(str)
+    previewReady = Signal(list)
 
     def __init__(
         self,
@@ -46,9 +48,23 @@ class PipelineWorker(QThread):
         self._pdf_path = pdf_path
         self._filter_path = filter_path
         self._cancel = threading.Event()
+        self._preview_event = threading.Event()
+        self._preview_answer = False
 
     def cancel(self) -> None:
+        self._preview_answer = False
+        self._preview_event.set()
         self._cancel.set()
+
+    def answer_preview(self, accepted: bool) -> None:
+        self._preview_answer = accepted
+        self._preview_event.set()
+
+    def _confirm(self, sample: list[GenericPartRecord]) -> bool:
+        self._preview_event.clear()
+        self.previewReady.emit(sample)
+        self._preview_event.wait()
+        return self._preview_answer
 
     def run(self) -> None:
         try:
@@ -92,6 +108,7 @@ class PipelineWorker(QThread):
             filter_sheet=filter_sheet,
             progress=progress,
             cancel=self._cancel,
+            confirm=self._confirm,
         )
         return result, output_path_for(urlparse(self._url).netloc)
 

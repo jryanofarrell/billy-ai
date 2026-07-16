@@ -156,8 +156,29 @@ class MainWindow(QMainWindow):
         worker.progressed.connect(self._show_progress)
         worker.succeeded.connect(self._run_succeeded)
         worker.failed.connect(self._run_failed)
+        worker.previewReady.connect(self._on_preview_ready)
         worker.finished.connect(worker.deleteLater)
         worker.start()
+
+    def _on_preview_ready(self, sample: list) -> None:
+        self.status_label.setText("Waiting for your confirmation…")
+        lines = []
+        for record in sample[:5]:
+            loc = " / ".join(p for p in [record.category, record.subcategory] if p)
+            lines.append(f"{record.part_no} — {loc}" if loc else record.part_no)
+        text = (
+            "This is the first run against this website. Here's what I found"
+            " — do these look right?\n\n" + "\n".join(lines)
+        )
+        box = QMessageBox(self)
+        box.setWindowTitle("New website — check these parts")
+        box.setText(text)
+        box.setIcon(QMessageBox.Icon.Question)
+        continue_btn = box.addButton("Continue", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if self._worker is not None:
+            self._worker.answer_preview(box.clickedButton() == continue_btn)
 
     def _cancel_run(self) -> None:
         if self._worker is not None:

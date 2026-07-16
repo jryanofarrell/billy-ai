@@ -1,9 +1,12 @@
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 pytest.importorskip("PySide6")
+
+from PySide6.QtCore import Qt  # noqa: E402
 
 from parts_parser.gui import worker as worker_module  # noqa: E402
 from parts_parser.gui.worker import PipelineWorker, output_path_for  # noqa: E402
@@ -89,3 +92,41 @@ def test_worker_unexpected_error_emits_exception_type(monkeypatch):
 
     assert len(failed) == 1
     assert "ValueError" in failed[0]
+
+
+@pytest.mark.parametrize("answer", [True, False])
+def test_confirm_blocks_until_preview_answer_and_returns_it(answer):
+    worker = PipelineWorker(url="https://example.com", pdf_path=None, filter_path=None)
+    preview_ready = threading.Event()
+    worker.previewReady.connect(
+        lambda sample: preview_ready.set(), Qt.ConnectionType.DirectConnection
+    )
+    returned = []
+    thread = threading.Thread(target=lambda: returned.append(worker._confirm([])))
+
+    thread.start()
+    assert preview_ready.wait(timeout=1)
+    assert thread.is_alive()
+    worker.answer_preview(answer)
+    thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert returned == [answer]
+
+
+def test_cancel_during_pending_preview_releases_confirm_with_false():
+    worker = PipelineWorker(url="https://example.com", pdf_path=None, filter_path=None)
+    preview_ready = threading.Event()
+    worker.previewReady.connect(
+        lambda sample: preview_ready.set(), Qt.ConnectionType.DirectConnection
+    )
+    returned = []
+    thread = threading.Thread(target=lambda: returned.append(worker._confirm([])))
+
+    thread.start()
+    assert preview_ready.wait(timeout=1)
+    worker.cancel()
+    thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert returned == [False]

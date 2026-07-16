@@ -7,8 +7,12 @@ import pytest
 
 from parts_parser.output.filtering import FilterEntry, FilterSheet, normalize_key
 from parts_parser.store import RunStore
-from parts_parser.web.pipeline import run_web
+from parts_parser.web import pipeline as pipeline_module
+from parts_parser.web.discovery import ConfigValidation
+from parts_parser.web.generic import PartRecord as GenericPartRecord
+from parts_parser.web.pipeline import resolve_site_config, run_generic, run_web
 from parts_parser.web.session import WebError
+from parts_parser.web.site_config import SiteConfig
 
 FIXTURES = Path(__file__).parent / "fixtures" / "insite"
 
@@ -26,8 +30,16 @@ _SINGLE_PAGE_PRODUCTS = {
 
 
 class FakeSession:
-    def __init__(self, responses: dict[str, dict]) -> None:
-        self._responses = responses
+    def __init__(
+        self,
+        responses: dict[str, dict] | None = None,
+        *,
+        html: dict[str, str] | None = None,
+        text: dict[str, str] | None = None,
+    ) -> None:
+        self._responses = responses or {}
+        self._html = html or {}
+        self._text = text or {}
         self.calls: list[str] = []
 
     def establish(self, url: str) -> None:
@@ -39,6 +51,29 @@ class FakeSession:
             if key in url:
                 return value
         raise WebError(f"No fixture for {url}")
+
+    def get_html(self, url: str) -> str:
+        self.calls.append(url)
+        if url in self._html:
+            return self._html[url]
+        raise WebError(f"No fixture for {url}")
+
+    def get_text(self, url: str) -> str:
+        self.calls.append(url)
+        if url in self._text:
+            return self._text[url]
+        raise WebError(f"No fixture for {url}")
+
+
+class FakeLLM:
+    def __init__(self, responses: list[dict]) -> None:
+        self.responses = responses
+        self.calls = 0
+
+    def complete_json(self, *, system: str, user: str) -> dict:
+        response = self.responses[self.calls]
+        self.calls += 1
+        return response
 
 
 def _factory(session: FakeSession):
@@ -54,6 +89,51 @@ def _filter_sheet(*raw_keys: str) -> FilterSheet:
         FilterEntry(raw=k, normalized=normalize_key(k), row=i + 1) for i, k in enumerate(raw_keys)
     ]
     return FilterSheet(path=Path("fake.xlsx"), column_label="column A", entries=entries)
+
+
+def _generic_config(**changes) -> SiteConfig:
+    values = {
+        "platform": "generic",
+        "enumeration": {
+            "strategy": "sitemap",
+            "sitemap_url": "https://example.com/sitemap.xml",
+            "product_url_pattern": r"/products/",
+        },
+        "selectors": {"part_no": ".part-number"},
+    }
+    values.update(changes)
+    return SiteConfig(**values)
+
+
+def _discovery_fixture() -> tuple[FakeSession, FakeLLM]:
+    urls = [f"https://example.com/products/P-{i}" for i in range(1, 6)]
+    sitemap = (
+        "<urlset>"
+        + "".join(f"<url><loc>{url}</loc></url>" for url in urls)
+        + "</urlset>"
+    )
+    html = {"https://example.com": f'<a href="{urls[0]}">sample</a>'}
+    html.update(
+        {url: f'<div class="part-number">P-{i}</div>' for i, url in enumerate(urls, 1)}
+    )
+    session = FakeSession(
+        html=html,
+        text={"https://example.com/sitemap.xml": sitemap},
+    )
+    llm = FakeLLM(
+        [
+            {
+                "product_url_example": urls[0],
+                "product_url_pattern": r"/products/",
+                "category_link_pattern": None,
+                "pagination_param": None,
+                "search_url_template": None,
+                "strategy": "sitemap",
+            },
+            {"part_no": ".part-number", "breadcrumb": None, "attributes": None},
+        ]
+    )
+    return session, llm
 
 
 @pytest.fixture
@@ -168,13 +248,15 @@ def test_crawl_mode_fills_category_from_tree(tmp_path, categories_data, page1_da
 # --- unsupported site ---
 
 
-def test_unsupported_site_raises_readable_web_error(tmp_path):
-    session = FakeSession({})  # no websites/current → detect returns False
-    with pytest.raises(WebError, match="isn't supported"):
+def test_unreadable_unknown_site_raises_readable_web_error(tmp_path):
+    session = FakeSession(html={"https://example.com": "<p>Catalog</p>"})
+    llm = FakeLLM([{}])
+    with pytest.raises(WebError, match="Couldn't figure out this website"):
         run_web(
             "https://example.com/",
             store=RunStore(root=tmp_path),
             session_factory=_factory(session),
+            llm_factory=lambda: llm,
         )
 
 
@@ -279,6 +361,191 @@ def test_record_run_crawl_mode(tmp_path, categories_data, page1_data, page2_data
     assert len(runs) == 1
     assert runs[0]["mode"] == "crawl"
     assert runs[0]["parts"] > 0
+
+
+# --- generic discovery pipeline ---
+
+
+def test_unknown_site_discovers_validates_runs_and_caches_with_probe(tmp_path):
+    store = RunStore(root=tmp_path)
+    session, llm = _discovery_fixture()
+
+    result = run_web(
+        "https://example.com/",
+        store=store,
+        session_factory=_factory(session),
+        llm_factory=lambda: llm,
+        confirm=lambda sample: len(sample) == 5,
+    )
+
+    assert [part.part_no for part in result.parts] == [f"P-{i}" for i in range(1, 6)]
+    assert llm.calls == 2
+    saved = store.get_site_config("example.com")
+    assert saved is not None
+    assert saved["probe"] == {
+        "url": "https://example.com/products/P-1",
+        "part_no": "P-1",
+    }
+
+    second = run_web(
+        "https://example.com/",
+        store=store,
+        session_factory=_factory(session),
+        llm_factory=lambda: llm,
+    )
+
+    assert len(second.parts) == 5
+    assert llm.calls == 2
+
+
+def test_resolve_site_config_cached_generic_probe_mismatch_rediscovers(
+    tmp_path, monkeypatch
+):
+    store = RunStore(root=tmp_path)
+    cached = _generic_config(
+        probe={"url": "https://example.com/products/old", "part_no": "OLD"}
+    )
+    store.save_site_config("example.com", cached.to_dict())
+    session = FakeSession(
+        html={"https://example.com/products/old": '<div class="part-number">CHANGED</div>'}
+    )
+    discovered = _generic_config()
+    discoveries = []
+    monkeypatch.setattr(pipeline_module.insite, "detect", lambda session, base: False)
+    monkeypatch.setattr(
+        pipeline_module,
+        "discover_site_config",
+        lambda *args: discoveries.append(args) or discovered,
+    )
+    sample = GenericPartRecord("NEW", "https://example.com/products/new")
+    monkeypatch.setattr(
+        pipeline_module,
+        "validate_site_config",
+        lambda *args: ConfigValidation([sample], []),
+    )
+
+    resolved = resolve_site_config(
+        session,
+        store,
+        "example.com",
+        "https://example.com",
+        llm_factory=lambda: FakeLLM([]),
+        confirm=None,
+        progress=lambda message, fraction: None,
+    )
+
+    assert resolved is discovered
+    assert len(discoveries) == 1
+    assert store.get_site_config("example.com")["probe"]["part_no"] == "NEW"
+
+
+def test_resolve_site_config_retries_failed_gate_once_then_raises(tmp_path, monkeypatch):
+    discoveries = []
+    monkeypatch.setattr(pipeline_module.insite, "detect", lambda session, base: False)
+    monkeypatch.setattr(
+        pipeline_module,
+        "discover_site_config",
+        lambda *args: discoveries.append(args) or _generic_config(),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "validate_site_config",
+        lambda *args: ConfigValidation([], ["not enough sample parts"]),
+    )
+
+    with pytest.raises(WebError, match="Couldn't reliably read this website"):
+        resolve_site_config(
+            FakeSession(),
+            RunStore(root=tmp_path),
+            "example.com",
+            "https://example.com",
+            llm_factory=lambda: FakeLLM([]),
+            confirm=None,
+            progress=lambda message, fraction: None,
+        )
+
+    assert len(discoveries) == 2
+
+
+def test_resolve_site_config_declined_preview_does_not_cache(tmp_path, monkeypatch):
+    store = RunStore(root=tmp_path)
+    sample = GenericPartRecord("P-1", "https://example.com/products/P-1")
+    monkeypatch.setattr(pipeline_module.insite, "detect", lambda session, base: False)
+    monkeypatch.setattr(
+        pipeline_module, "discover_site_config", lambda *args: _generic_config()
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "validate_site_config",
+        lambda *args: ConfigValidation([sample], []),
+    )
+
+    with pytest.raises(WebError, match="Cancelled after preview"):
+        resolve_site_config(
+            FakeSession(),
+            store,
+            "example.com",
+            "https://example.com",
+            llm_factory=lambda: FakeLLM([]),
+            confirm=lambda parts: False,
+            progress=lambda message, fraction: None,
+        )
+
+    assert store.get_site_config("example.com") is None
+
+
+def test_run_generic_search_template_keeps_only_normalized_equal_hits():
+    config = _generic_config(search_url_template="https://example.com/search?q={query}")
+    session = FakeSession(
+        html={
+            "https://example.com/search?q=AB-12": (
+                '<a href="/products/exact">exact</a><a href="/products/near">near</a>'
+            ),
+            "https://example.com/products/exact": '<span class="part-number">AB 12</span>',
+            "https://example.com/products/near": '<span class="part-number">AB-123</span>',
+        }
+    )
+
+    records = run_generic(
+        session,
+        config,
+        "https://example.com",
+        filter_sheet=_filter_sheet("AB-12"),
+        progress=lambda message, fraction: None,
+        cancel=None,
+    )
+
+    assert [record.part_no for record in records] == ["AB 12"]
+
+
+def test_run_generic_crawl_skips_pages_without_part_number():
+    config = _generic_config(
+        enumeration={
+            "strategy": "category_crawl",
+            "start_urls": ["https://example.com/catalog"],
+            "product_link_pattern": r"/products/",
+        }
+    )
+    session = FakeSession(
+        html={
+            "https://example.com/catalog": (
+                '<a href="/products/good">good</a><a href="/products/missing">missing</a>'
+            ),
+            "https://example.com/products/good": '<span class="part-number">GOOD-1</span>',
+            "https://example.com/products/missing": "<p>No number here</p>",
+        }
+    )
+
+    records = run_generic(
+        session,
+        config,
+        "https://example.com",
+        filter_sheet=None,
+        progress=lambda message, fraction: None,
+        cancel=None,
+    )
+
+    assert [record.part_no for record in records] == ["GOOD-1"]
 
 
 # --- cancel ---
