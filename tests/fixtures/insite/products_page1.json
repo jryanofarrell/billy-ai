@@ -1,0 +1,20 @@
+{
+  "products": [
+    {
+      "productNumber": "28001",
+      "id": "prod-1",
+      "urlSegment": "28001-segment",
+      "attributeTypes": []
+    },
+    {
+      "productNumber": "28002",
+      "id": "prod-2",
+      "urlSegment": "28002-segment",
+      "attributeTypes": []
+    }
+  ],
+  "pagination": {
+    "numberOfPages": 2,
+    "page": 1
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "categories": [
+    {
+      "shortDescription": "Brass Fittings",
+      "id": "cat-1",
+      "subCategories": [
+        {
+          "shortDescription": "Pipe",
+          "id": "cat-1-1",
+          "subCategories": [
+            {
+              "shortDescription": "90-Deg Female Elbow",
+              "id": "cat-1-1-1",
+              "subCategories": []
+            },
+            {
+              "shortDescription": "Coupling",
+              "id": "cat-1-1-2",
+              "subCategories": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+SECTION B COMPRESSION FITTINGS
+
+COMPRESSION STRAIGHT CONNECTOR Male NPT To Tube
+
+Tube Size  Part No.  Description
+1/4 in     XX-100-A  Tube 1/4 in Pipe 1/8 in NPT brass body
+3/8 in     XX-101-A  Tube 3/8 in Pipe 1/4 in NPT brass body
+
+Pressure rated 250 PSI at 70 degrees F.

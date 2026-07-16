@@ -1,0 +1,17 @@
+name: build
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --group build
+      - run: uv run python scripts/build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PartsCatalogParser-windows
+          path: dist/*.zip
