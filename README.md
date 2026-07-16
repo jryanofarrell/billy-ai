@@ -22,10 +22,11 @@ lands in `~/Downloads` and contains a `Parts` sheet plus a `Match Report` sheet 
 a filter was supplied. On the first run against a new website, review the sample
 parts preview and confirm that they look right before the full parse continues.
 
-**API key:** PDF parsing calls an LLM (~$1–2 per catalog, once — results are cached by
-file hash). Set `OPENAI_API_KEY` or paste a key into Settings. Website runs against
-known sites use **no AI at all**; an unknown site's first run uses a few calls to
-learn its structure.
+**API key:** PDF table parsing is deterministic first: regular pages are processed
+instantly and for free, with AI used only for pages that do not fit the table rules
+(plus a catalog TOC call when one is present). Results are cached by file hash. Set
+`OPENAI_API_KEY` or paste a key into Settings. Website runs against known sites use
+**no AI at all**; an unknown site's first run uses a few calls to learn its structure.
 
 ## What's supported today
 
@@ -33,7 +34,7 @@ learn its structure.
 |---|---|---|
 | Websites on the Insite/Optimizely B2B commerce platform (e.g. midlandindustries.com — detection is automatic) | ✅ | none — the platform's JSON API is read directly |
 | Any other website | ✅ | one-time AI structure discovery (a few LLM calls, once per site); deterministic thereafter; first run shows a preview to confirm |
-| Digital-text catalog PDFs (e.g. Fairview master catalog) | ✅ | one LLM call per page, once per unique file |
+| Digital-text catalog PDFs (e.g. Fairview master catalog) | ✅ | deterministic table parsing; AI fallback only for pages that do not fit the table rules |
 | Scanned/image PDFs | ❌ detected and declined | — |
 
 Repeat runs on a known source hit the local run store (site configs, PDF cache, run
@@ -50,7 +51,7 @@ src/parts_parser/
   output/          filter loading/matching (verbatim part numbers, normalized matching)
                    + Excel writer (Parts + Match Report sheets)
   web/             Playwright session (Cloudflare-capable) + Insite adapter + pipeline
-  pdf/             text extraction, TOC parse, per-page AI extraction, validation, cache
+  pdf/             text extraction, TOC parse, deterministic tables with per-page AI fallback, validation, cache
   gui/             PySide6 window, drop zones, settings dialog, worker thread
 ```
 

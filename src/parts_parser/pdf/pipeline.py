@@ -9,6 +9,7 @@ from parts_parser.models import PartRecord
 from parts_parser.output.filtering import FilterSheet, MatchReport, match_parts
 from parts_parser.pdf.extract import PdfError, extract_text, is_digital
 from parts_parser.pdf.pages import PageResult, extract_page_parts
+from parts_parser.pdf.tables import parse_page_tables
 from parts_parser.pdf.toc import find_toc_pages, parse_toc, section_for_page
 from parts_parser.pdf.validate import validate_parts
 from parts_parser.store import RunStore, hash_file
@@ -45,7 +46,6 @@ def run_pdf(
         parts = [PartRecord(**d) for d in cached["parts"]]
         validation = cached["validation"]
     else:
-        llm = llm or get_client()
         pages = extract_text(path)
 
         if not is_digital(pages):
@@ -55,9 +55,11 @@ def run_pdf(
             )
 
         toc_idx = find_toc_pages(pages)
-        sections = (
-            parse_toc(llm, "\n".join(pages[i] for i in toc_idx), len(pages)) if toc_idx else []
-        )
+        if toc_idx:
+            llm = llm or get_client()
+            sections = parse_toc(llm, "\n".join(pages[i] for i in toc_idx), len(pages))
+        else:
+            sections = []
 
         page_results: list[PageResult] = []
         current_page = 1
@@ -80,7 +82,27 @@ def run_pdf(
                     continue
                 section = section_for_page(sections, current_page)
                 category = section.category if section is not None else ""
-                page_results.append(extract_page_parts(llm, text, current_page, category))
+                det_parts, reasons = parse_page_tables(text)
+                if reasons:
+                    progress(
+                        f"Reading page {current_page} of {len(pages)} (AI)…",
+                        i / len(pages),
+                    )
+                    llm = llm or get_client()
+                    page_result = extract_page_parts(llm, text, current_page, category)
+                else:
+                    page_title = next(
+                        (line.strip() for line in text.splitlines() if line.strip()),
+                        "",
+                    )
+                    page_result = PageResult(
+                        page_no=current_page,
+                        subcategory=page_title,
+                        parts=det_parts,
+                        skipped=not det_parts,
+                        skip_reason=None,
+                    )
+                page_results.append(page_result)
         except _Cancelled:
             stopped_early = f"Cancelled on page {current_page} of {len(pages)}."
         except LLMError as error:

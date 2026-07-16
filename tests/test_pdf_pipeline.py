@@ -48,6 +48,32 @@ def _skip_resp(reason: str = "marketing page") -> dict:
     return {"subcategory": "", "parts": [], "skip_reason": reason}
 
 
+def _toc_resp() -> dict:
+    return {
+        "sections": [
+            {
+                "name": "Synthetic Fittings",
+                "category": "Fittings",
+                "start_page": 1,
+                "end_page": None,
+            }
+        ]
+    }
+
+
+def _prose_page(part_no: str) -> str:
+    return f"""Synthetic specialty component
+
+This component is selected for unusual installations where an ordinary table
+does not describe the available configuration. Consult the application notes
+for material compatibility, operating limits, inspection intervals, assembly
+steps, and safe handling requirements. The catalog identifies the available
+component as {part_no}, followed by additional prose about installation and
+maintenance. This synthetic page deliberately has enough readable text to be
+treated as a digital catalog page while requiring structured AI extraction.
+"""
+
+
 def _make_pdf(tmp_path: Path) -> Path:
     p = tmp_path / "catalog.pdf"
     p.write_bytes(b"SYNTHETIC-PDF-BYTES-FOR-HASHING")
@@ -59,26 +85,65 @@ def store(tmp_path):
     return RunStore(root=tmp_path / "store")
 
 
-def test_full_run_produces_parts_with_sequence_and_writes_cache(tmp_path, store, monkeypatch):
+def test_all_regular_pages_use_llm_only_for_toc_and_write_deterministic_cache(
+    tmp_path, store, monkeypatch
+):
     single_text = (_FIXTURES / "page_single_size.txt").read_text()
     two_text = (_FIXTURES / "page_two_size.txt").read_text()
-    pages = [single_text, two_text]
+    pages = ["Table of Contents", single_text, two_text]
     monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: pages)
 
     pdf_path = _make_pdf(tmp_path)
-    llm = FakeLLM(
-        [
-            _parts_resp(["XX-100-A", "XX-101-A"], "Compression Straight"),
-            _parts_resp(["XX-200-A", "XX-201-A"], "Compression Elbow"),
-        ]
-    )
+    llm = FakeLLM([_toc_resp()])
 
     result = run_pdf(pdf_path, store=store, llm=llm)
 
-    assert len(result.parts) == 4
-    assert [p.sequence for p in result.parts] == [1, 2, 3, 4]
-    assert [p.part_no for p in result.parts] == ["XX-100-A", "XX-101-A", "XX-200-A", "XX-201-A"]
-    assert store.get_pdf_cache(hash_file(pdf_path))["complete"] is True
+    expected_part_nos = [
+        "XX-100-A",
+        "XX-101-A",
+        "XX-200-A",
+        "XX-201-A",
+        "XX-210-A",
+        "XX-211-A",
+    ]
+    assert llm.call_count == 1
+    assert [part.part_no for part in result.parts] == expected_part_nos
+    assert [part.sequence for part in result.parts] == list(range(1, 7))
+    cache = store.get_pdf_cache(hash_file(pdf_path))
+    assert cache["complete"] is True
+    assert [part["part_no"] for part in cache["parts"]] == expected_part_nos
+
+
+def test_fallback_page_merges_with_deterministic_parts_in_page_order_and_cache(
+    tmp_path, store, monkeypatch
+):
+    single_text = (_FIXTURES / "page_single_size.txt").read_text()
+    two_text = (_FIXTURES / "page_two_size.txt").read_text()
+    prose_text = _prose_page("SPECIAL-300-A")
+    pages = ["Table of Contents", single_text, prose_text, two_text]
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: pages)
+
+    pdf_path = _make_pdf(tmp_path)
+    llm = FakeLLM([_toc_resp(), _parts_resp(["SPECIAL-300-A"], "Specialty")])
+
+    result = run_pdf(pdf_path, store=store, llm=llm)
+
+    expected_part_nos = [
+        "XX-100-A",
+        "XX-101-A",
+        "SPECIAL-300-A",
+        "XX-200-A",
+        "XX-201-A",
+        "XX-210-A",
+        "XX-211-A",
+    ]
+    assert llm.call_count == 2
+    assert [part.part_no for part in result.parts] == expected_part_nos
+    assert [part.sequence for part in result.parts] == list(range(1, 8))
+    cache = store.get_pdf_cache(hash_file(pdf_path))
+    assert cache["complete"] is True
+    assert [part["part_no"] for part in cache["parts"]] == expected_part_nos
+    assert [part["sequence"] for part in cache["parts"]] == list(range(1, 8))
 
 
 def test_second_run_hits_cache_makes_zero_llm_calls_returns_same_parts(
@@ -90,12 +155,7 @@ def test_second_run_hits_cache_makes_zero_llm_calls_returns_same_parts(
     monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: pages)
 
     pdf_path = _make_pdf(tmp_path)
-    first_llm = FakeLLM(
-        [
-            _parts_resp(["XX-100-A", "XX-101-A"]),
-            _parts_resp(["XX-200-A", "XX-201-A"]),
-        ]
-    )
+    first_llm = FakeLLM([])
     first_result = run_pdf(pdf_path, store=store, llm=first_llm)
 
     second_llm = FakeLLM([])
@@ -109,8 +169,11 @@ def test_second_run_hits_cache_makes_zero_llm_calls_returns_same_parts(
 def test_partial_llm_failure_is_cached_incomplete_and_reparsed_on_next_run(
     tmp_path, store, monkeypatch
 ):
-    page = (_FIXTURES / "page_single_size.txt").read_text()
-    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: [page, page])
+    first_page = _prose_page("XX-100-A")
+    second_page = _prose_page("XX-101-A")
+    monkeypatch.setattr(
+        "parts_parser.pdf.pipeline.extract_text", lambda _path: [first_page, second_page]
+    )
     pdf_path = _make_pdf(tmp_path)
 
     failed_llm = FakeLLM(
@@ -134,7 +197,7 @@ def test_partial_llm_failure_is_cached_incomplete_and_reparsed_on_next_run(
 
 
 def test_clean_cache_is_served_without_llm_calls(tmp_path, store, monkeypatch):
-    page = (_FIXTURES / "page_single_size.txt").read_text()
+    page = _prose_page("XX-100-A")
     monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: [page])
     pdf_path = _make_pdf(tmp_path)
 
@@ -183,19 +246,18 @@ def test_blank_page_skips_llm_call(tmp_path, store, monkeypatch):
     monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: pages)
 
     pdf_path = _make_pdf(tmp_path)
-    llm = FakeLLM([_parts_resp(["XX-100-A", "XX-101-A"])])
+    llm = FakeLLM([])
 
     result = run_pdf(pdf_path, store=store, llm=llm)
 
-    assert llm.call_count == 1
+    assert llm.call_count == 0
     assert len(result.parts) == 2
 
 
 def test_cancel_mid_loop_returns_partial_and_writes_incomplete_cache(
     tmp_path, store, monkeypatch
 ):
-    single_text = (_FIXTURES / "page_single_size.txt").read_text()
-    pages = [single_text, single_text]
+    pages = [_prose_page("XX-100-A"), _prose_page("XX-101-A")]
     monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: pages)
 
     pdf_path = _make_pdf(tmp_path)
@@ -214,7 +276,7 @@ def test_cancel_mid_loop_returns_partial_and_writes_incomplete_cache(
 
 
 def test_llm_failure_on_first_content_page_raises(tmp_path, store, monkeypatch):
-    page = (_FIXTURES / "page_single_size.txt").read_text()
+    page = _prose_page("XX-100-A")
     monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: [page])
     pdf_path = _make_pdf(tmp_path)
 

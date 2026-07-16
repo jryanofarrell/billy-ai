@@ -16,8 +16,9 @@ provider-agnostic LLM boundary, and local persistent run state.
 | `src/parts_parser/pdf/extract.py` | Extracts per-page text from a PDF via `pypdf`; classifies pages as digital or scanned. |
 | `src/parts_parser/pdf/toc.py` | Detects TOC pages by dotted-leader density and parses them into ordered sections via one `complete_json` call. Prompt lives here. |
 | `src/parts_parser/pdf/pages.py` | Sends the per-page extraction prompt and returns parts/subcategory/skip for each page. Prompt lives here. |
+| `src/parts_parser/pdf/tables.py` | Deterministically extracts regular PDF table rows into verbatim `RawPart` records and reports page-level reasons to use the AI fallback. |
 | `src/parts_parser/pdf/validate.py` | Drops parts whose number isn't found in the page text, deduplicates, assigns sequence, and reports totals/drops/dupes. |
-| `src/parts_parser/pdf/pipeline.py` | Orchestrates the full PDF run: cache lookup, extraction, TOC parse, per-page AI calls, validation, filter matching, and `record_run`. |
+| `src/parts_parser/pdf/pipeline.py` | Orchestrates the full PDF run: cache lookup, extraction, TOC parse, deterministic per-page table parsing with triggered AI fallback, validation, filter matching, and `record_run`. |
 | `src/parts_parser/web/` | Provides the throttled Playwright browser session, Insite/Optimizely API adapter, and filter-or-crawl web pipeline. |
 | `src/parts_parser/web/site_config.py` | Defines the provider-neutral `SiteConfig` schema, dict serialization, and generic-config schema validation. |
 | `src/parts_parser/web/generic.py` | Deterministically enumerates and parses non-Insite sites from a `SiteConfig`, including sitemap, bounded crawl, and search-template paths. |
@@ -25,6 +26,29 @@ provider-agnostic LLM boundary, and local persistent run state.
 | `src/parts_parser/gui/` | Provides the PySide6 desktop UI: source and optional-filter drop zones, saved settings dialog, main-window pipeline controls, and background worker wiring for web and PDF runs. |
 | `src/parts_parser/keepawake.py` | Best-effort context manager that prevents system sleep while a worker run is active. |
 | `src/parts_parser/__main__.py` | Creates the Qt application and opens the `Parts Catalog Parser` window; launch it with `python -m parts_parser`. |
+
+## Deterministic PDF tables
+
+`pdf/tables.py` applies five description rules in priority order: a
+`Description` column is captured as free text, with a trailing numeric `Qty` or
+`Quantity` labeled separately; values on both sides of `PART No.` retain labels
+from both sides; ordinary columns after `PART No.` become `Label: value` pairs;
+tables with all size columns before `PART No.` use those preceding labels; and a
+part-only row gets an empty description. Mirrored headers containing two
+`PART No.` columns emit both sides of each row.
+
+The part-code test requires at least one digit and either a hyphen or a letter,
+while rejecting values that are entirely simple or mixed-number fractions. It
+therefore accepts shapes such as `1460-4`, `S3749-2A`, and `GO9-72`, but rejects
+`3/8`, `.122`, and `1-1/4`. Accepted part numbers are stored exactly as they
+appear in the page text.
+
+A page uses AI extraction only when deterministic parsing reports one or more
+fallback triggers:
+
+- adjacent tokens may form a spaced part number;
+- a table-like row has an unrecognized part-number shape;
+- a page with at least 40 whitespace-delimited tokens produces no parts.
 
 ## Insite endpoint facts
 
