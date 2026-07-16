@@ -1,5 +1,7 @@
 """Main window for the parts catalog parser desktop application."""
 
+from datetime import datetime, timezone
+from math import ceil
 from pathlib import Path
 
 from PySide6.QtCore import QUrl
@@ -22,6 +24,7 @@ from parts_parser.gui.drop_zone import DropZone
 from parts_parser.gui.settings_dialog import SettingsDialog
 from parts_parser.gui.source_panels import PdfPanel, UrlPanel
 from parts_parser.gui.worker import PipelineWorker
+from parts_parser.web.pipeline import CachedDataInfo
 
 
 def _display_path(path: str) -> str:
@@ -157,8 +160,43 @@ class MainWindow(QMainWindow):
         worker.succeeded.connect(self._run_succeeded)
         worker.failed.connect(self._run_failed)
         worker.previewReady.connect(self._on_preview_ready)
+        worker.cacheDecision.connect(self._on_cache_decision)
         worker.finished.connect(worker.deleteLater)
         worker.start()
+
+    def _on_cache_decision(self, info: CachedDataInfo) -> None:
+        self.status_label.setText("Waiting for your choice…")
+        days_ago = (datetime.now(timezone.utc).date() - info.fetched_at.date()).days
+        if days_ago <= 0:
+            age = "today"
+        elif days_ago == 1:
+            age = "yesterday"
+        else:
+            age = f"{days_ago} days ago"
+
+        completeness = "partial " if not info.complete else ""
+        estimate = (
+            f"{ceil(info.estimated_crawl_seconds / 60)} minutes"
+            if info.estimated_crawl_seconds is not None
+            else "a while"
+        )
+        text = (
+            f"I have {completeness}data for this website from {age} "
+            f"({info.part_count:,} parts).\n\n"
+            f"Re-downloading takes about {estimate}."
+        )
+        box = QMessageBox(self)
+        box.setWindowTitle("Use saved website data?")
+        box.setText(text)
+        box.setIcon(QMessageBox.Icon.Question)
+        use_saved_btn = box.addButton(
+            "Use saved data", QMessageBox.ButtonRole.AcceptRole
+        )
+        box.addButton("Get fresh data", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(use_saved_btn)
+        box.exec()
+        if self._worker is not None:
+            self._worker.answer_cache_decision(box.clickedButton() == use_saved_btn)
 
     def _on_preview_ready(self, sample: list) -> None:
         self.status_label.setText("Waiting for your confirmation…")
@@ -206,7 +244,7 @@ class MainWindow(QMainWindow):
         if warning:
             QMessageBox.information(
                 self,
-                "Stopped early",
+                "Heads up",
                 warning
                 + "\n\nThe workbook contains everything collected before the stop.",
             )

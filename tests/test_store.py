@@ -25,6 +25,21 @@ def test_pdf_cache_round_trip_and_miss(tmp_path):
     assert store.get_pdf_cache("missing") is None
 
 
+def test_web_cache_round_trip_normalizes_domain_and_preserves_complete(tmp_path):
+    store = RunStore(root=tmp_path)
+    payload = {
+        "fetched_at": "2026-07-15T12:00:00+00:00",
+        "crawl_seconds": 42.5,
+        "complete": False,
+        "parts": [{"part_no": "AB- 123", "attributes": {}}],
+    }
+
+    store.save_web_cache("WWW.Example.COM", payload)
+
+    assert store.get_web_cache("example.com") == payload
+    assert store.get_web_cache("missing.example.com") is None
+
+
 def test_record_run_appends_records_with_distinct_ids_and_timestamps(tmp_path):
     store = RunStore(root=tmp_path)
 

@@ -12,7 +12,7 @@ from parts_parser.pdf.extract import PdfError
 from parts_parser.pdf.pipeline import run_pdf
 from parts_parser.store import RunStore
 from parts_parser.web.generic import PartRecord as GenericPartRecord
-from parts_parser.web.pipeline import run_web
+from parts_parser.web.pipeline import CachedDataInfo, run_web
 from parts_parser.web.session import WebError
 
 
@@ -35,6 +35,7 @@ class PipelineWorker(QThread):
     succeeded = Signal(str, int, str)
     failed = Signal(str)
     previewReady = Signal(list)
+    cacheDecision = Signal(object)
 
     def __init__(
         self,
@@ -51,21 +52,35 @@ class PipelineWorker(QThread):
         self._cancel = threading.Event()
         self._preview_event = threading.Event()
         self._preview_answer = False
+        self._cache_decision_event = threading.Event()
+        self._use_saved_cache = True
 
     def cancel(self) -> None:
         self._preview_answer = False
         self._preview_event.set()
+        self._use_saved_cache = True
+        self._cache_decision_event.set()
         self._cancel.set()
 
     def answer_preview(self, accepted: bool) -> None:
         self._preview_answer = accepted
         self._preview_event.set()
 
+    def answer_cache_decision(self, use_saved: bool) -> None:
+        self._use_saved_cache = use_saved
+        self._cache_decision_event.set()
+
     def _confirm(self, sample: list[GenericPartRecord]) -> bool:
         self._preview_event.clear()
         self.previewReady.emit(sample)
         self._preview_event.wait()
         return self._preview_answer
+
+    def _choose_cached(self, info: CachedDataInfo) -> bool:
+        self._cache_decision_event.clear()
+        self.cacheDecision.emit(info)
+        self._cache_decision_event.wait()
+        return self._use_saved_cache
 
     def run(self) -> None:
         with keep_awake():
@@ -105,8 +120,10 @@ class PipelineWorker(QThread):
                     mode=mode,
                     match_report=result.match_report,
                 )
+                warnings = [result.stopped_early] if result.stopped_early else []
+                warnings.extend(getattr(result, "notices", []))
                 self.succeeded.emit(
-                    str(output_path), len(result.parts), result.stopped_early or ""
+                    str(output_path), len(result.parts), "\n".join(warnings)
                 )
             except (WebError, PdfError, LLMError, OutputError) as error:
                 self.failed.emit(str(error))
@@ -123,6 +140,7 @@ class PipelineWorker(QThread):
             progress=progress,
             cancel=self._cancel,
             confirm=self._confirm,
+            choose_cached=self._choose_cached,
         )
         return result, output_path_for(urlparse(self._url).netloc)
 

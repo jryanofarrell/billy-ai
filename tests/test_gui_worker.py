@@ -99,6 +99,32 @@ def test_worker_partial_success_writes_workbook_and_emits_warning(tmp_path, monk
     assert writes == [((parts, expected_path), {"mode": "pdf", "match_report": None})]
 
 
+def test_worker_joins_stopped_early_warning_and_result_notices(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    stopped_early = "Stopped after the website stopped responding."
+    notice = "The site may have changed its layout."
+    result = SimpleNamespace(
+        parts=[object()],
+        match_report=None,
+        stopped_early=stopped_early,
+        notices=[notice],
+    )
+    monkeypatch.setattr(worker_module, "RunStore", object)
+    monkeypatch.setattr(worker_module, "run_pdf", lambda *args, **kwargs: result)
+    monkeypatch.setattr(worker_module, "write_workbook", lambda *args, **kwargs: None)
+    worker = PipelineWorker(
+        url=None, pdf_path=str(tmp_path / "catalog.pdf"), filter_path=None
+    )
+    succeeded = []
+    worker.succeeded.connect(
+        lambda path, count, warning: succeeded.append((path, count, warning))
+    )
+
+    worker.run()
+
+    assert succeeded[0][1:] == (1, f"{stopped_early}\n{notice}")
+
+
 def test_worker_partial_result_without_parts_emits_failure(tmp_path, monkeypatch):
     warning = "Cancelled before any parts were collected."
     result = SimpleNamespace(parts=[], match_report=None, stopped_early=warning)
@@ -199,3 +225,50 @@ def test_cancel_during_pending_preview_releases_confirm_with_false():
 
     assert not thread.is_alive()
     assert returned == [False]
+
+
+@pytest.mark.parametrize("answer", [True, False])
+def test_choose_cached_blocks_until_cache_answer_and_returns_it(answer):
+    worker = PipelineWorker(url="https://example.com", pdf_path=None, filter_path=None)
+    decision_ready = threading.Event()
+    info = SimpleNamespace(part_count=12)
+    emitted = []
+    worker.cacheDecision.connect(
+        lambda value: (emitted.append(value), decision_ready.set()),
+        Qt.ConnectionType.DirectConnection,
+    )
+    returned = []
+    thread = threading.Thread(
+        target=lambda: returned.append(worker._choose_cached(info))
+    )
+
+    thread.start()
+    assert decision_ready.wait(timeout=1)
+    assert thread.is_alive()
+    worker.answer_cache_decision(answer)
+    thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert emitted == [info]
+    assert returned == [answer]
+
+
+def test_cancel_during_pending_cache_decision_releases_wait():
+    worker = PipelineWorker(url="https://example.com", pdf_path=None, filter_path=None)
+    decision_ready = threading.Event()
+    worker.cacheDecision.connect(
+        lambda info: decision_ready.set(), Qt.ConnectionType.DirectConnection
+    )
+    returned = []
+    thread = threading.Thread(
+        target=lambda: returned.append(worker._choose_cached(SimpleNamespace()))
+    )
+
+    thread.start()
+    assert decision_ready.wait(timeout=1)
+    assert thread.is_alive()
+    worker.cancel()
+    thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert returned == [True]

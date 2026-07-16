@@ -40,6 +40,11 @@ instantly and for free, with AI used only for pages that do not fit the table ru
 Repeat runs on a known source hit the local run store (site configs, PDF cache, run
 history in the OS app-data dir) and make **zero** AI calls.
 
+**Saved website data:** After a website crawl, its data is kept locally. The next
+run offers to use the saved data or re-download it, with an estimated download
+time. A crawl that stopped early is saved too and clearly labeled as partial.
+Saved data also makes filtered runs instant and able to work offline.
+
 ## Structure
 
 ```

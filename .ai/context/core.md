@@ -79,6 +79,7 @@ PartsParser/
 ├── settings.json
 ├── site_configs/
 ├── pdf_cache/
+├── web_cache/
 └── runs.jsonl
 ```
 
@@ -93,11 +94,40 @@ PartsParser/
   `complete: true` are cache hits. A stopped-early parse is persisted with
   `complete: false` for partial-state visibility but is never served as cached
   output; a later run reparses the file.
+- `web_cache/` stores one crawl per normalized domain with the shape
+  `{"fetched_at": <UTC ISO timestamp>, "crawl_seconds": <seconds>,
+  "complete": <bool>, "parts": [...]}`. A later full-site collection replaces
+  the prior payload. Completed crawls set `complete: true`; crawls that stop
+  early, including enumeration that stops after finding every requested filter
+  entry, are still cached with the collected parts and `complete: false`.
+  Partial saved data is labeled in the GUI's saved-data choice. When it is used
+  for filtering, the result notice and GUI warning explain that unmatched entries
+  may simply not have been downloaded yet.
 - `runs.jsonl` is append-only run history; each record receives an ID and UTC
-  timestamp. Partial-run records also include their `stopped_early` reason.
+  timestamp. Partial-run records also include their `stopped_early` reason, and
+  web records identify `data_source` as `cache` or `live`.
 
 Tests can set `PARTS_PARSER_DATA_DIR` to redirect all default app-data access
 to a temporary directory.
+
+## Website cache behavior
+
+When saved website data exists, the GUI shows its age, part count, completeness,
+and estimated re-crawl time, then defaults to using it. Headless runs also reuse
+saved data by default. Choosing fresh data performs a live crawl and replaces the
+saved payload.
+
+Filter lists of at most 500 entries use per-part search when the site supports it
+and do not write a website cache. Larger lists perform full-site enumeration,
+cache the collected site data, and match afterward. On a discovered site without
+search, enumeration may stop once every filter entry has matched; that cache is
+retained but marked `complete: false`.
+
+Refreshing one complete cache with another complete crawl produces a drift notice
+when the new crawl contains fewer than 50% of the old part count. It also produces
+a notice when attributes existed on more than half of the old parts but are empty
+across every new part. These notices are attached to the web result and surfaced
+by the GUI after the run.
 
 ## Stopped-early results
 

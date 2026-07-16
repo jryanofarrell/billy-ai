@@ -1,6 +1,7 @@
 import json
 import threading
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -130,6 +131,35 @@ def _generic_config(**changes) -> SiteConfig:
     return SiteConfig(**values)
 
 
+def _cached_part(part_no: str, *, attributes: dict[str, str] | None = None) -> dict:
+    return {
+        "part_no": part_no,
+        "category": "Synthetic",
+        "subcategory": "",
+        "series": "",
+        "description": "",
+        "attributes": attributes or {},
+    }
+
+
+def _save_cache(
+    store: RunStore,
+    parts: list[dict],
+    *,
+    complete: bool = True,
+    fetched_at: str = "2026-01-01T00:00:00+00:00",
+) -> None:
+    store.save_web_cache(
+        "example.com",
+        {
+            "fetched_at": fetched_at,
+            "crawl_seconds": 120.0,
+            "complete": complete,
+            "parts": parts,
+        },
+    )
+
+
 def _discovery_fixture() -> tuple[FakeSession, FakeLLM]:
     urls = [f"https://example.com/products/P-{i}" for i in range(1, 6)]
     sitemap = (
@@ -189,6 +219,64 @@ def page2_data():
 # --- filter mode ---
 
 
+def test_cache_hit_with_hook_returns_parts_report_without_constructing_session(tmp_path):
+    store = RunStore(root=tmp_path)
+    _save_cache(store, [_cached_part("AB- 123"), _cached_part("OTHER")])
+    choices = []
+
+    def forbidden_factory():
+        raise AssertionError("BrowserSession must not be constructed for cache reuse")
+
+    result = run_web(
+        "https://WWW.Example.COM/catalog",
+        store=store,
+        filter_sheet=_filter_sheet("AB123", "MISSING"),
+        session_factory=forbidden_factory,
+        choose_cached=lambda info: choices.append(info) or True,
+    )
+
+    assert [part.part_no for part in result.parts] == ["AB- 123"]
+    assert result.match_report is not None
+    assert [item.match_type for item in result.match_report.results] == [
+        "normalized",
+        "unmatched",
+    ]
+    assert choices[0].part_count == 2
+    assert choices[0].complete is True
+    assert choices[0].fetched_at == datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert choices[0].estimated_crawl_seconds == 120.0
+    assert store.list_runs()[0]["data_source"] == "cache"
+
+
+def test_cache_hit_without_hook_reuses_cache(tmp_path):
+    store = RunStore(root=tmp_path)
+    _save_cache(store, [_cached_part("SAVED-1")])
+
+    def forbidden_factory():
+        raise AssertionError("headless cache reuse must not construct a session")
+
+    result = run_web(
+        "https://example.com", store=store, session_factory=forbidden_factory
+    )
+
+    assert [part.part_no for part in result.parts] == ["SAVED-1"]
+
+
+def test_incomplete_cache_filter_result_has_unmatched_data_notice(tmp_path):
+    store = RunStore(root=tmp_path)
+    _save_cache(store, [_cached_part("FOUND")], complete=False)
+
+    result = run_web(
+        "https://example.com",
+        store=store,
+        filter_sheet=_filter_sheet("FOUND", "NOT-FOUND"),
+        session_factory=lambda: (_ for _ in ()).throw(AssertionError("session created")),
+    )
+
+    assert result.notices
+    assert "unmatched parts may simply not have been downloaded yet" in result.notices[0]
+
+
 def test_filter_mode_keeps_only_normalized_equal_hits(tmp_path, search_data, catalogpages_data):
     """Near-miss products (28002-LF, 128002) are excluded; only exact-normalized match passes."""
     session = FakeSession(
@@ -227,6 +315,55 @@ def test_filter_mode_fetches_each_breadcrumb_once(tmp_path, search_data, catalog
     )
     breadcrumb_calls = [c for c in session.calls if "catalogpages" in c]
     assert len(breadcrumb_calls) == 1
+
+
+def test_small_filter_search_path_does_not_write_web_cache(
+    tmp_path, search_data, catalogpages_data
+):
+    store = RunStore(root=tmp_path)
+    session = FakeSession(
+        {
+            "websites/current": {"id": "site-1"},
+            "search": search_data,
+            "catalogpages": catalogpages_data,
+        }
+    )
+
+    run_web(
+        "https://example.com",
+        store=store,
+        filter_sheet=_filter_sheet("28002"),
+        session_factory=_factory(session),
+    )
+
+    assert store.get_web_cache("example.com") is None
+
+
+def test_large_filter_crawls_and_writes_complete_cache(
+    tmp_path, categories_data, page1_data, page2_data
+):
+    store = RunStore(root=tmp_path)
+    session = FakeSession(
+        {
+            "websites/current": {"id": "site-1"},
+            "categories": categories_data,
+            "&page=1": page1_data,
+            "&page=2": page2_data,
+        }
+    )
+
+    run_web(
+        "https://example.com",
+        store=store,
+        filter_sheet=_filter_sheet(*(f"SYNTH-{index}" for index in range(501))),
+        session_factory=_factory(session),
+    )
+
+    cache = store.get_web_cache("example.com")
+    assert cache is not None
+    assert cache["complete"] is True
+    assert cache["parts"]
+    assert not any("?search=" in call for call in session.calls)
 
 
 # --- crawl mode ---
@@ -268,6 +405,31 @@ def test_crawl_mode_fills_category_from_tree(tmp_path, categories_data, page1_da
         assert record.category == "Brass Fittings"
         assert record.subcategory == "Pipe"
         assert record.series in ("90-Deg Female Elbow", "Coupling")
+
+
+def test_completed_crawl_writes_complete_cache(
+    tmp_path, categories_data, page1_data, page2_data
+):
+    store = RunStore(root=tmp_path)
+    session = FakeSession(
+        {
+            "websites/current": {"id": "site-1"},
+            "categories": categories_data,
+            "&page=1": page1_data,
+            "&page=2": page2_data,
+        }
+    )
+
+    result = run_web(
+        "https://example.com", store=store, session_factory=_factory(session)
+    )
+
+    cache = store.get_web_cache("example.com")
+    assert cache is not None
+    assert cache["complete"] is True
+    assert [part["part_no"] for part in cache["parts"]] == [
+        part.part_no for part in result.parts
+    ]
 
 
 # --- unsupported site ---
@@ -386,12 +548,15 @@ def test_record_run_crawl_mode(tmp_path, categories_data, page1_data, page2_data
     assert len(runs) == 1
     assert runs[0]["mode"] == "crawl"
     assert runs[0]["parts"] > 0
+    assert runs[0]["data_source"] == "live"
 
 
 def test_crawl_error_after_collection_returns_partial_and_records_reason(
     tmp_path, categories_data
 ):
     store = RunStore(root=tmp_path)
+    _save_cache(store, [_cached_part("OLD")], complete=True)
+    old_cache = store.get_web_cache("example.com")
     session = ListingFailureSession(
         {
             "websites/current": {"id": "site-1"},
@@ -405,12 +570,82 @@ def test_crawl_error_after_collection_returns_partial_and_records_reason(
         "https://example.com/",
         store=store,
         session_factory=_factory(session),
+        choose_cached=lambda info: False,
     )
 
     assert [part.part_no for part in result.parts] == ["28001"]
     assert result.stopped_early is not None
     assert "Coupling" in result.stopped_early
     assert store.list_runs()[0]["stopped_early"] == result.stopped_early
+    cache = store.get_web_cache("example.com")
+    assert cache is not None
+    assert cache["complete"] is False
+    assert [part["part_no"] for part in cache["parts"]] == ["28001"]
+    assert cache["fetched_at"] != old_cache["fetched_at"]
+
+
+def test_refresh_replaces_cache_and_records_live_source(
+    tmp_path, categories_data, page1_data, page2_data
+):
+    store = RunStore(root=tmp_path)
+    _save_cache(store, [_cached_part("OLD")])
+    old_fetched_at = store.get_web_cache("example.com")["fetched_at"]
+    session = FakeSession(
+        {
+            "websites/current": {"id": "site-1"},
+            "categories": categories_data,
+            "&page=1": page1_data,
+            "&page=2": page2_data,
+        }
+    )
+
+    result = run_web(
+        "https://example.com",
+        store=store,
+        session_factory=_factory(session),
+        choose_cached=lambda info: False,
+    )
+
+    cache = store.get_web_cache("example.com")
+    assert cache["fetched_at"] != old_fetched_at
+    assert datetime.fromisoformat(cache["fetched_at"]) <= datetime.now(timezone.utc)
+    assert [part["part_no"] for part in cache["parts"]] == [
+        part.part_no for part in result.parts
+    ]
+    assert store.list_runs()[0]["data_source"] == "live"
+
+
+def test_drift_notice_only_on_complete_to_complete_refresh(tmp_path, monkeypatch):
+    def collect_ten(*args, records, **kwargs):
+        records.extend(
+            GenericPartRecord(f"NEW-{index}", f"https://example.com/products/{index}")
+            for index in range(10)
+        )
+        return records
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "resolve_site_config",
+        lambda *args, **kwargs: _generic_config(),
+    )
+    monkeypatch.setattr(pipeline_module, "run_generic", collect_ten)
+
+    for old_complete, expect_notice in ((True, True), (False, False)):
+        store = RunStore(root=tmp_path / str(old_complete))
+        _save_cache(
+            store,
+            [_cached_part(f"OLD-{index}") for index in range(100)],
+            complete=old_complete,
+        )
+        result = run_web(
+            "https://example.com",
+            store=store,
+            session_factory=_factory(FakeSession()),
+            choose_cached=lambda info: False,
+        )
+
+        assert bool(result.notices) is expect_notice
+        assert len(store.get_web_cache("example.com")["parts"]) == 10
 
 
 def test_crawl_error_before_collection_still_raises(tmp_path, categories_data):

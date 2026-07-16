@@ -1,7 +1,9 @@
 import threading
+import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from parts_parser.llm import LLMClient, get_client
@@ -20,12 +22,23 @@ from parts_parser.web.generic import (
 from parts_parser.web.session import BrowserSession, WebError
 from parts_parser.web.site_config import SiteConfig
 
+FILTER_SEARCH_MAX_ENTRIES = 500
+
+
+@dataclass
+class CachedDataInfo:
+    fetched_at: datetime
+    part_count: int
+    complete: bool
+    estimated_crawl_seconds: float | None
+
 
 @dataclass
 class WebRunResult:
     parts: list[PartRecord]
     match_report: MatchReport | None
     stopped_early: str | None = None
+    notices: list[str] = field(default_factory=list)
 
 
 class _Cancelled(Exception):
@@ -109,6 +122,8 @@ def run_generic(
     cancel: threading.Event | None,
     records: list[GenericPartRecord] | None = None,
     set_current_unit: Callable[[str], None] = lambda unit: None,
+    force_enumeration: bool = False,
+    early_stopped_event: threading.Event | None = None,
 ) -> list[GenericPartRecord]:
     """Collect PartRecords from a non-Insite site per its discovered config."""
     if records is None:
@@ -117,7 +132,8 @@ def run_generic(
 
     if filter_sheet:
         entries = filter_sheet.entries
-        if config.search_url_template:
+        wanted = {entry.normalized for entry in entries}
+        if config.search_url_template and not force_enumeration:
             for i, entry in enumerate(entries):
                 if cancel and cancel.is_set():
                     raise _Cancelled
@@ -142,6 +158,11 @@ def run_generic(
                 record = parse_product_page(html, url, config)
                 if record is not None:
                     records.append(record)
+                    found = {normalize_key(item.part_no) for item in records}
+                    if wanted <= found:
+                        if early_stopped_event is not None:
+                            early_stopped_event.set()
+                        break
     else:
         if strategy == "sitemap":
             url_iter = iter_sitemap_product_urls(session, config, base)
@@ -170,9 +191,44 @@ def run_web(
     session_factory: Callable[[], AbstractContextManager] = BrowserSession,
     confirm: Callable[[list[GenericPartRecord]], bool] | None = None,
     llm_factory: Callable[[], LLMClient] = get_client,
+    choose_cached: Callable[[CachedDataInfo], bool] | None = None,
 ) -> WebRunResult:
     domain = urlparse(url).netloc.lower()
     base = f"https://{domain}"
+    outgoing_cache = store.get_web_cache(domain)
+
+    if outgoing_cache is not None:
+        fetched_at = datetime.fromisoformat(outgoing_cache["fetched_at"])
+        info = CachedDataInfo(
+            fetched_at=fetched_at,
+            part_count=len(outgoing_cache["parts"]),
+            complete=outgoing_cache["complete"],
+            estimated_crawl_seconds=outgoing_cache.get("crawl_seconds"),
+        )
+        use_cache = choose_cached(info) if choose_cached is not None else True
+        if use_cache:
+            cached_parts = [PartRecord(**part) for part in outgoing_cache["parts"]]
+            if filter_sheet:
+                matched, report = match_parts(filter_sheet, cached_parts)
+                result = WebRunResult(matched, report)
+                if not outgoing_cache["complete"]:
+                    result.notices.append(
+                        "Matched against saved data that is incomplete "
+                        "(an earlier crawl stopped early) — any unmatched parts may simply "
+                        "not have been downloaded yet. Choose 'Get fresh data' for a full crawl."
+                    )
+            else:
+                result = WebRunResult(cached_parts, None)
+            store.record_run(
+                {
+                    "source": domain,
+                    "kind": "web",
+                    "mode": "filter" if filter_sheet else "crawl",
+                    "parts": len(result.parts),
+                    "data_source": "cache",
+                }
+            )
+            return result
 
     with session_factory() as session:
         session.establish(base)
@@ -189,6 +245,9 @@ def run_web(
         current_unit: str | None = None
         records_insite: list[PartRecord] = []
         generic_records: list[GenericPartRecord] = []
+        early_stopped_event = threading.Event()
+        full_site_collection = not filter_sheet
+        collection_started_at = time.monotonic()
 
         def set_current_unit(unit: str) -> None:
             nonlocal current_unit
@@ -196,7 +255,12 @@ def run_web(
 
         try:
             if config.platform == "insite":
-                if filter_sheet:
+                use_search = bool(
+                    filter_sheet
+                    and len(filter_sheet.entries) <= FILTER_SEARCH_MAX_ENTRIES
+                )
+                full_site_collection = not use_search
+                if use_search:
                     breadcrumb_cache: dict[str, list[str]] = {}
                     seen: dict[str, PartRecord] = {}
                     entries = filter_sheet.entries
@@ -221,6 +285,11 @@ def run_web(
                     tree = insite.get_category_tree(session, base)
                     leaves = list(insite.iter_leaf_categories(tree))
                     seen_crawl: dict[str, PartRecord] = {}
+                    wanted = (
+                        {entry.normalized for entry in filter_sheet.entries}
+                        if filter_sheet
+                        else set()
+                    )
                     for i, (name_path, leaf) in enumerate(leaves):
                         if cancel and cancel.is_set():
                             raise _Cancelled
@@ -236,7 +305,18 @@ def run_web(
                                 )
                                 if first_product is None:
                                     first_product = product
+                        if wanted and wanted <= {
+                            normalize_key(record.part_no) for record in records_insite
+                        }:
+                            early_stopped_event.set()
+                            break
             else:
+                use_search = bool(
+                    filter_sheet
+                    and len(filter_sheet.entries) <= FILTER_SEARCH_MAX_ENTRIES
+                    and config.search_url_template
+                )
+                full_site_collection = not use_search
                 try:
                     run_generic(
                         session, config, base,
@@ -245,6 +325,8 @@ def run_web(
                         cancel=cancel,
                         records=generic_records,
                         set_current_unit=set_current_unit,
+                        force_enumeration=full_site_collection,
+                        early_stopped_event=early_stopped_event,
                     )
                 except WebError as error:
                     if cancel and cancel.is_set() and str(error) == "Cancelled.":
@@ -266,7 +348,10 @@ def run_web(
                 f"Kept {collected_count} parts."
             )
 
+        collection_seconds = time.monotonic() - collection_started_at
+        all_collected_parts: list[PartRecord]
         if config.platform == "insite":
+            all_collected_parts = records_insite
             if filter_sheet:
                 matched, report = match_parts(filter_sheet, records_insite)
                 result = WebRunResult(matched, report, stopped_early)
@@ -285,11 +370,60 @@ def run_web(
                 if r.part_no not in seen_generic:
                     seen_generic[r.part_no] = r
             deduped = list(seen_generic.values())
+            all_collected_parts = [
+                PartRecord(
+                    part_no=record.part_no,
+                    category=record.category,
+                    subcategory=record.subcategory,
+                    series=record.series,
+                    attributes=record.attributes,
+                )
+                for record in deduped
+            ]
             if filter_sheet:
-                matched_generic, report_generic = match_parts(filter_sheet, deduped)
+                matched_generic, report_generic = match_parts(
+                    filter_sheet, all_collected_parts
+                )
                 result = WebRunResult(matched_generic, report_generic, stopped_early)
             else:
-                result = WebRunResult(deduped, None, stopped_early)
+                result = WebRunResult(all_collected_parts, None, stopped_early)
+
+        cache_complete = stopped_early is None and not early_stopped_event.is_set()
+        if full_site_collection:
+            if (
+                outgoing_cache is not None
+                and outgoing_cache.get("complete")
+                and cache_complete
+            ):
+                old_parts = outgoing_cache["parts"]
+                old_count = len(old_parts)
+                new_count = len(all_collected_parts)
+                if new_count < old_count * 0.5:
+                    result.notices.append(
+                        f"This site returned {new_count} parts where the saved copy had "
+                        f"{old_count} — its layout may have changed."
+                    )
+                old_with_attributes = sum(
+                    bool(part.get("attributes")) for part in old_parts
+                )
+                if (
+                    old_parts
+                    and old_with_attributes > len(old_parts) * 0.5
+                    and not any(part.attributes for part in all_collected_parts)
+                ):
+                    result.notices.append(
+                        "Part specifications came back empty — the site may have "
+                        "changed its layout."
+                    )
+            store.save_web_cache(
+                domain,
+                {
+                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    "crawl_seconds": collection_seconds,
+                    "complete": cache_complete,
+                    "parts": [asdict(part) for part in all_collected_parts],
+                },
+            )
 
         run_record = {
             "source": domain,
@@ -297,6 +431,7 @@ def run_web(
             "mode": "filter" if filter_sheet else "crawl",
             "parts": len(result.parts),
             "platform": config.platform,
+            "data_source": "live",
         }
         if stopped_early is not None:
             run_record["stopped_early"] = stopped_early
