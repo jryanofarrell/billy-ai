@@ -25,6 +25,11 @@ from parts_parser.web.site_config import SiteConfig
 class WebRunResult:
     parts: list[PartRecord]
     match_report: MatchReport | None
+    stopped_early: str | None = None
+
+
+class _Cancelled(Exception):
+    """Signal that collection stopped at the operator's request."""
 
 
 def resolve_site_config(
@@ -102,9 +107,12 @@ def run_generic(
     filter_sheet: FilterSheet | None,
     progress: Callable[[str, float], None],
     cancel: threading.Event | None,
+    records: list[GenericPartRecord] | None = None,
+    set_current_unit: Callable[[str], None] = lambda unit: None,
 ) -> list[GenericPartRecord]:
     """Collect PartRecords from a non-Insite site per its discovered config."""
-    records: list[GenericPartRecord] = []
+    if records is None:
+        records = []
     strategy = config.enumeration.get("strategy", "category_crawl")
 
     if filter_sheet:
@@ -112,7 +120,8 @@ def run_generic(
         if config.search_url_template:
             for i, entry in enumerate(entries):
                 if cancel and cancel.is_set():
-                    raise WebError("Cancelled.")
+                    raise _Cancelled
+                set_current_unit(entry.raw)
                 progress(f"Searching {entry.raw}…", i / len(entries))
                 urls = search_product_urls(session, config, base, entry.raw)
                 for url in urls:
@@ -127,7 +136,8 @@ def run_generic(
                 url_iter = iter_crawl_product_urls(session, config, base, progress, cancel)
             for url in url_iter:
                 if cancel and cancel.is_set():
-                    raise WebError("Cancelled.")
+                    raise _Cancelled
+                set_current_unit(url)
                 html = session.get_html(url)
                 record = parse_product_page(html, url, config)
                 if record is not None:
@@ -139,7 +149,8 @@ def run_generic(
             url_iter = iter_crawl_product_urls(session, config, base, progress, cancel)
         for url in url_iter:
             if cancel and cancel.is_set():
-                raise WebError("Cancelled.")
+                raise _Cancelled
+            set_current_unit(url)
             progress(f"Reading {url}…", -1.0)
             html = session.get_html(url)
             record = parse_product_page(html, url, config)
@@ -174,46 +185,93 @@ def run_web(
         )
 
         first_product: dict | None = None
+        stopped_early: str | None = None
+        current_unit: str | None = None
+        records_insite: list[PartRecord] = []
+        generic_records: list[GenericPartRecord] = []
 
-        if config.platform == "insite":
-            if filter_sheet:
-                breadcrumb_cache: dict[str, list[str]] = {}
-                seen: dict[str, PartRecord] = {}
-                entries = filter_sheet.entries
-                for i, entry in enumerate(entries):
-                    if cancel and cancel.is_set():
-                        raise WebError("Cancelled.")
-                    progress(f"Searching {entry.raw}…", i / len(entries))
-                    for product in insite.search_products(session, base, entry.raw):
-                        if normalize_key(product["productNumber"]) == entry.normalized:
-                            seg = product["urlSegment"]
-                            if seg not in breadcrumb_cache:
-                                breadcrumb_cache[seg] = insite.get_breadcrumb(session, base, seg)
-                            if product["productNumber"] not in seen:
-                                seen[product["productNumber"]] = insite.product_to_record(
-                                    product, breadcrumb_cache[seg]
+        def set_current_unit(unit: str) -> None:
+            nonlocal current_unit
+            current_unit = unit
+
+        try:
+            if config.platform == "insite":
+                if filter_sheet:
+                    breadcrumb_cache: dict[str, list[str]] = {}
+                    seen: dict[str, PartRecord] = {}
+                    entries = filter_sheet.entries
+                    for i, entry in enumerate(entries):
+                        if cancel and cancel.is_set():
+                            raise _Cancelled
+                        current_unit = entry.raw
+                        progress(f"Searching {entry.raw}…", i / len(entries))
+                        for product in insite.search_products(session, base, entry.raw):
+                            if normalize_key(product["productNumber"]) == entry.normalized:
+                                seg = product["urlSegment"]
+                                if seg not in breadcrumb_cache:
+                                    breadcrumb_cache[seg] = insite.get_breadcrumb(session, base, seg)
+                                if product["productNumber"] not in seen:
+                                    seen[product["productNumber"]] = insite.product_to_record(
+                                        product, breadcrumb_cache[seg]
+                                    )
+                                    records_insite.append(seen[product["productNumber"]])
+                                    if first_product is None:
+                                        first_product = product
+                else:
+                    tree = insite.get_category_tree(session, base)
+                    leaves = list(insite.iter_leaf_categories(tree))
+                    seen_crawl: dict[str, PartRecord] = {}
+                    for i, (name_path, leaf) in enumerate(leaves):
+                        if cancel and cancel.is_set():
+                            raise _Cancelled
+                        current_unit = " / ".join(name_path)
+                        progress(f"Reading {current_unit}…", i / len(leaves))
+                        for product in insite.list_category_products(session, base, leaf["id"]):
+                            if product["productNumber"] not in seen_crawl:
+                                seen_crawl[product["productNumber"]] = insite.product_to_record(
+                                    product, name_path
+                                )
+                                records_insite.append(
+                                    seen_crawl[product["productNumber"]]
                                 )
                                 if first_product is None:
                                     first_product = product
-                records_insite = list(seen.values())
-                matched, report = match_parts(filter_sheet, records_insite)
-                result = WebRunResult(matched, report)
             else:
-                tree = insite.get_category_tree(session, base)
-                leaves = list(insite.iter_leaf_categories(tree))
-                seen_crawl: dict[str, PartRecord] = {}
-                for i, (name_path, leaf) in enumerate(leaves):
-                    if cancel and cancel.is_set():
-                        raise WebError("Cancelled.")
-                    progress(f"Reading {' / '.join(name_path)}…", i / len(leaves))
-                    for product in insite.list_category_products(session, base, leaf["id"]):
-                        if product["productNumber"] not in seen_crawl:
-                            seen_crawl[product["productNumber"]] = insite.product_to_record(
-                                product, name_path
-                            )
-                            if first_product is None:
-                                first_product = product
-                result = WebRunResult(list(seen_crawl.values()), None)
+                try:
+                    run_generic(
+                        session, config, base,
+                        filter_sheet=filter_sheet,
+                        progress=progress,
+                        cancel=cancel,
+                        records=generic_records,
+                        set_current_unit=set_current_unit,
+                    )
+                except WebError as error:
+                    if cancel and cancel.is_set() and str(error) == "Cancelled.":
+                        raise _Cancelled from error
+                    raise
+        except _Cancelled:
+            stopped_early = "Cancelled — kept the parts collected up to that point."
+        except WebError as error:
+            collected_count = (
+                len(records_insite)
+                if config.platform == "insite"
+                else len(generic_records)
+            )
+            if not collected_count:
+                raise
+            location = f" while reading {current_unit}" if current_unit else ""
+            stopped_early = (
+                f"Stopped early after a website error{location} ({error}). "
+                f"Kept {collected_count} parts."
+            )
+
+        if config.platform == "insite":
+            if filter_sheet:
+                matched, report = match_parts(filter_sheet, records_insite)
+                result = WebRunResult(matched, report, stopped_early)
+            else:
+                result = WebRunResult(records_insite, None, stopped_early)
 
             if config.probe is None and first_product is not None:
                 config.probe = {
@@ -222,12 +280,6 @@ def run_web(
                 }
                 store.save_site_config(domain, config.to_dict())
         else:
-            generic_records = run_generic(
-                session, config, base,
-                filter_sheet=filter_sheet,
-                progress=progress,
-                cancel=cancel,
-            )
             seen_generic: dict[str, GenericPartRecord] = {}
             for r in generic_records:
                 if r.part_no not in seen_generic:
@@ -235,17 +287,18 @@ def run_web(
             deduped = list(seen_generic.values())
             if filter_sheet:
                 matched_generic, report_generic = match_parts(filter_sheet, deduped)
-                result = WebRunResult(matched_generic, report_generic)
+                result = WebRunResult(matched_generic, report_generic, stopped_early)
             else:
-                result = WebRunResult(deduped, None)
+                result = WebRunResult(deduped, None, stopped_early)
 
-        store.record_run(
-            {
-                "source": domain,
-                "kind": "web",
-                "mode": "filter" if filter_sheet else "crawl",
-                "parts": len(result.parts),
-                "platform": config.platform,
-            }
-        )
+        run_record = {
+            "source": domain,
+            "kind": "web",
+            "mode": "filter" if filter_sheet else "crawl",
+            "parts": len(result.parts),
+            "platform": config.platform,
+        }
+        if stopped_early is not None:
+            run_record["stopped_early"] = stopped_early
+        store.record_run(run_record)
         return result

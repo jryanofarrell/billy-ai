@@ -194,12 +194,22 @@ class MainWindow(QMainWindow):
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(percent)
 
-    def _run_succeeded(self, path: str, part_count: int) -> None:
+    def _run_succeeded(self, path: str, part_count: int, warning: str) -> None:
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(100)
-        self.status_label.setText(f"Done — {part_count:,} parts · saved to {_display_path(path)}")
+        status = f"Done — {part_count:,} parts · saved to {_display_path(path)}"
+        if warning:
+            status += " (stopped early)"
+        self.status_label.setText(status)
         self.status_label.setToolTip(path)
         self._configure_open_button(path)
+        if warning:
+            QMessageBox.information(
+                self,
+                "Stopped early",
+                warning
+                + "\n\nThe workbook contains everything collected before the stop.",
+            )
         self._finish_run()
 
     def _run_failed(self, message: str) -> None:

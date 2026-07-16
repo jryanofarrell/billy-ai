@@ -65,6 +65,31 @@ class FakeSession:
         raise WebError(f"No fixture for {url}")
 
 
+class ListingFailureSession(FakeSession):
+    def __init__(
+        self,
+        responses: dict[str, dict],
+        *,
+        successful_listing_calls: int,
+        cancel: threading.Event | None = None,
+    ) -> None:
+        super().__init__(responses)
+        self.successful_listing_calls = successful_listing_calls
+        self.listing_calls = 0
+        self.cancel = cancel
+
+    def get_json(self, url: str) -> dict:
+        if "/api/v2/products?categoryId=" in url:
+            if self.listing_calls >= self.successful_listing_calls:
+                raise WebError("The catalog stopped responding.")
+            self.listing_calls += 1
+            response = super().get_json(url)
+            if self.cancel is not None:
+                self.cancel.set()
+            return response
+        return super().get_json(url)
+
+
 class FakeLLM:
     def __init__(self, responses: list[dict]) -> None:
         self.responses = responses
@@ -363,6 +388,48 @@ def test_record_run_crawl_mode(tmp_path, categories_data, page1_data, page2_data
     assert runs[0]["parts"] > 0
 
 
+def test_crawl_error_after_collection_returns_partial_and_records_reason(
+    tmp_path, categories_data
+):
+    store = RunStore(root=tmp_path)
+    session = ListingFailureSession(
+        {
+            "websites/current": {"id": "site-1"},
+            "categories": categories_data,
+            "&page=1": _SINGLE_PAGE_PRODUCTS,
+        },
+        successful_listing_calls=1,
+    )
+
+    result = run_web(
+        "https://example.com/",
+        store=store,
+        session_factory=_factory(session),
+    )
+
+    assert [part.part_no for part in result.parts] == ["28001"]
+    assert result.stopped_early is not None
+    assert "Coupling" in result.stopped_early
+    assert store.list_runs()[0]["stopped_early"] == result.stopped_early
+
+
+def test_crawl_error_before_collection_still_raises(tmp_path, categories_data):
+    session = ListingFailureSession(
+        {
+            "websites/current": {"id": "site-1"},
+            "categories": categories_data,
+        },
+        successful_listing_calls=0,
+    )
+
+    with pytest.raises(WebError, match="catalog stopped responding"):
+        run_web(
+            "https://example.com/",
+            store=RunStore(root=tmp_path),
+            session_factory=_factory(session),
+        )
+
+
 # --- generic discovery pipeline ---
 
 
@@ -551,20 +618,25 @@ def test_run_generic_crawl_skips_pages_without_part_number():
 # --- cancel ---
 
 
-def test_cancel_aborts_with_web_error(tmp_path, categories_data):
-    session = FakeSession(
+def test_cancel_after_collection_returns_partial_result(tmp_path, categories_data):
+    cancel = threading.Event()
+    session = ListingFailureSession(
         {
             "websites/current": {"id": "site-1"},
             "categories": categories_data,
             "&page=1": _SINGLE_PAGE_PRODUCTS,
-        }
+        },
+        successful_listing_calls=1,
+        cancel=cancel,
     )
-    cancel = threading.Event()
-    cancel.set()
-    with pytest.raises(WebError, match="Cancelled"):
-        run_web(
-            "https://example.com/",
-            store=RunStore(root=tmp_path),
-            cancel=cancel,
-            session_factory=_factory(session),
-        )
+
+    result = run_web(
+        "https://example.com/",
+        store=RunStore(root=tmp_path),
+        cancel=cancel,
+        session_factory=_factory(session),
+    )
+
+    assert [part.part_no for part in result.parts] == ["28001"]
+    assert result.stopped_early is not None
+    assert "Cancelled" in result.stopped_early

@@ -23,6 +23,7 @@ provider-agnostic LLM boundary, and local persistent run state.
 | `src/parts_parser/web/generic.py` | Deterministically enumerates and parses non-Insite sites from a `SiteConfig`, including sitemap, bounded crawl, and search-template paths. |
 | `src/parts_parser/web/discovery.py` | Uses two structure-discovery LLM calls to derive a generic site config, then validates it against sampled product pages. |
 | `src/parts_parser/gui/` | Provides the PySide6 desktop UI: source and optional-filter drop zones, saved settings dialog, main-window pipeline controls, and background worker wiring for web and PDF runs. |
+| `src/parts_parser/keepawake.py` | Best-effort context manager that prevents system sleep while a worker run is active. |
 | `src/parts_parser/__main__.py` | Creates the Qt application and opens the `Parts Catalog Parser` window; launch it with `python -m parts_parser`. |
 
 ## Insite endpoint facts
@@ -62,14 +63,47 @@ PartsParser/
 - `site_configs/` stores one JSON file per normalized domain.
 - `pdf_cache/` stores parsed results in JSON files keyed by the source PDF's
   SHA-256 hash. Each cache file has the shape
-  `{"parts": [...], "validation": {...}}` where `parts` is the list of raw
-  `PartRecord`-compatible dicts and `validation` holds the summary counts
-  (totals, skipped pages, drops, duplicates).
+  `{"parts": [...], "validation": {...}, "complete": <bool>}` where `parts`
+  is the list of raw `PartRecord`-compatible dicts and `validation` holds the
+  summary counts (totals, skipped pages, drops, duplicates). Only entries with
+  `complete: true` are cache hits. A stopped-early parse is persisted with
+  `complete: false` for partial-state visibility but is never served as cached
+  output; a later run reparses the file.
 - `runs.jsonl` is append-only run history; each record receives an ID and UTC
-  timestamp.
+  timestamp. Partial-run records also include their `stopped_early` reason.
 
 Tests can set `PARTS_PARSER_DATA_DIR` to redirect all default app-data access
 to a temporary directory.
+
+## Stopped-early results
+
+`WebRunResult` and `PdfRunResult` both expose `stopped_early: str | None`.
+`None` means a clean run. A plain-language reason means collection stopped
+after usable records were produced, so the result is a success with a warning:
+the collected records remain available, filter matching and its match report
+are computed against those partial records, and run history records the reason.
+Errors before usable collection still raise rather than becoming partial
+successes.
+
+For PDF runs, cancellation or an LLM failure during the page loop validates and
+returns parts from completed pages. Such parses are marked `complete: false` in
+the PDF cache and are never reused; only a fully completed parse is stored with
+`complete: true` and can satisfy a later cache lookup.
+
+The GUI worker treats a stopped-early result containing at least one part as a
+successful run: it writes the workbook, reports
+`Done — N parts · saved to <path> (stopped early)`, and shows an information
+dialog containing the reason. A stopped-early result with no parts is presented
+as a failure. Clean-run presentation is unchanged.
+
+## Keep-awake behavior
+
+The worker holds `keep_awake()` around its entire run body. On macOS the context
+manager starts `caffeinate -i -m` and terminates it on exit. On Windows it calls
+`SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)` on entry and
+resets the state with `ES_CONTINUOUS` on exit. Other platforms are no-ops, and
+any acquisition or cleanup failure is silently ignored so power-management
+support cannot break a parser run. Display sleep is not prevented.
 
 ## Site-config schema
 

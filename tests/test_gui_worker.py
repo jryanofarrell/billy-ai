@@ -1,4 +1,5 @@
 import threading
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,6 +12,11 @@ from PySide6.QtCore import Qt  # noqa: E402
 from parts_parser.gui import worker as worker_module  # noqa: E402
 from parts_parser.gui.worker import PipelineWorker, output_path_for  # noqa: E402
 from parts_parser.pdf.extract import PdfError  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def fake_keep_awake(monkeypatch):
+    monkeypatch.setattr(worker_module, "keep_awake", nullcontext)
 
 
 def test_output_path_for_uses_downloads_and_name(tmp_path, monkeypatch):
@@ -35,11 +41,13 @@ def test_output_path_for_uses_next_available_collision_number(tmp_path, monkeypa
     assert third_path == downloads / "example.com-parts (3).xlsx"
 
 
-def test_worker_success_emits_written_path_and_part_count(tmp_path, monkeypatch):
+def test_worker_clean_success_emits_path_part_count_and_empty_warning(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     pdf_path = tmp_path / "catalog.pdf"
     parts = [object(), object()]
-    result = SimpleNamespace(parts=parts, match_report=None)
+    result = SimpleNamespace(parts=parts, match_report=None, stopped_early=None)
     writes = []
     monkeypatch.setattr(worker_module, "RunStore", object)
     monkeypatch.setattr(worker_module, "run_pdf", lambda *args, **kwargs: result)
@@ -50,14 +58,75 @@ def test_worker_success_emits_written_path_and_part_count(tmp_path, monkeypatch)
     )
     worker = PipelineWorker(url=None, pdf_path=str(pdf_path), filter_path=None)
     succeeded = []
-    worker.succeeded.connect(lambda path, count: succeeded.append((path, count)))
+    worker.succeeded.connect(
+        lambda path, count, warning: succeeded.append((path, count, warning))
+    )
 
     worker.run()
 
     expected_path = tmp_path / "Downloads" / "catalog-parts.xlsx"
-    assert succeeded == [(str(expected_path), 2)]
+    assert succeeded == [(str(expected_path), 2, "")]
     assert writes == [((parts, expected_path), {"mode": "pdf", "match_report": None})]
     assert expected_path.parent.is_dir()  # worker creates Downloads when missing
+
+
+def test_worker_partial_success_writes_workbook_and_emits_warning(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    pdf_path = tmp_path / "catalog.pdf"
+    parts = [object()]
+    warning = "Stopped on page 2 of 3."
+    result = SimpleNamespace(parts=parts, match_report=None, stopped_early=warning)
+    writes = []
+    monkeypatch.setattr(worker_module, "RunStore", object)
+    monkeypatch.setattr(worker_module, "run_pdf", lambda *args, **kwargs: result)
+    monkeypatch.setattr(
+        worker_module,
+        "write_workbook",
+        lambda *args, **kwargs: writes.append((args, kwargs)),
+    )
+    worker = PipelineWorker(url=None, pdf_path=str(pdf_path), filter_path=None)
+    succeeded = []
+    worker.succeeded.connect(
+        lambda path, count, emitted_warning: succeeded.append(
+            (path, count, emitted_warning)
+        )
+    )
+
+    worker.run()
+
+    expected_path = tmp_path / "Downloads" / "catalog-parts.xlsx"
+    assert succeeded == [(str(expected_path), 1, warning)]
+    assert writes == [((parts, expected_path), {"mode": "pdf", "match_report": None})]
+
+
+def test_worker_partial_result_without_parts_emits_failure(tmp_path, monkeypatch):
+    warning = "Cancelled before any parts were collected."
+    result = SimpleNamespace(parts=[], match_report=None, stopped_early=warning)
+    writes = []
+    monkeypatch.setattr(worker_module, "RunStore", object)
+    monkeypatch.setattr(worker_module, "run_pdf", lambda *args, **kwargs: result)
+    monkeypatch.setattr(
+        worker_module,
+        "write_workbook",
+        lambda *args, **kwargs: writes.append(args),
+    )
+    worker = PipelineWorker(
+        url=None, pdf_path=str(tmp_path / "catalog.pdf"), filter_path=None
+    )
+    failed = []
+    succeeded = []
+    worker.failed.connect(failed.append)
+    worker.succeeded.connect(
+        lambda path, count, emitted_warning: succeeded.append(
+            (path, count, emitted_warning)
+        )
+    )
+
+    worker.run()
+
+    assert failed == [warning]
+    assert succeeded == []
+    assert writes == []
 
 
 def test_worker_pdf_error_emits_plain_language_message(tmp_path, monkeypatch):

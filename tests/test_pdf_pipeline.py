@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from parts_parser.llm import LLMError
 from parts_parser.output.filtering import FilterEntry, FilterSheet, MatchReport
 from parts_parser.pdf.extract import PdfError
 from parts_parser.pdf.pipeline import run_pdf
@@ -13,13 +14,26 @@ _FIXTURES = Path(__file__).parent / "fixtures" / "pdf"
 
 
 class FakeLLM:
-    def __init__(self, responses: list[dict]) -> None:
+    def __init__(
+        self,
+        responses: list[dict | Exception],
+        *,
+        cancel_after_call: tuple[threading.Event, int] | None = None,
+    ) -> None:
         self._queue = list(responses)
         self.call_count = 0
+        self.cancel_after_call = cancel_after_call
 
     def complete_json(self, *, system: str, user: str, **kwargs) -> dict:
         self.call_count += 1
-        return self._queue.pop(0)
+        response = self._queue.pop(0)
+        if self.cancel_after_call is not None:
+            event, call_number = self.cancel_after_call
+            if self.call_count == call_number:
+                event.set()
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 def _parts_resp(part_nos: list[str], subcategory: str = "Test Fittings") -> dict:
@@ -64,7 +78,7 @@ def test_full_run_produces_parts_with_sequence_and_writes_cache(tmp_path, store,
     assert len(result.parts) == 4
     assert [p.sequence for p in result.parts] == [1, 2, 3, 4]
     assert [p.part_no for p in result.parts] == ["XX-100-A", "XX-101-A", "XX-200-A", "XX-201-A"]
-    assert store.get_pdf_cache(hash_file(pdf_path)) is not None
+    assert store.get_pdf_cache(hash_file(pdf_path))["complete"] is True
 
 
 def test_second_run_hits_cache_makes_zero_llm_calls_returns_same_parts(
@@ -90,6 +104,47 @@ def test_second_run_hits_cache_makes_zero_llm_calls_returns_same_parts(
     assert second_llm.call_count == 0
     assert [p.part_no for p in second_result.parts] == [p.part_no for p in first_result.parts]
     assert [p.sequence for p in second_result.parts] == [p.sequence for p in first_result.parts]
+
+
+def test_partial_llm_failure_is_cached_incomplete_and_reparsed_on_next_run(
+    tmp_path, store, monkeypatch
+):
+    page = (_FIXTURES / "page_single_size.txt").read_text()
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: [page, page])
+    pdf_path = _make_pdf(tmp_path)
+
+    failed_llm = FakeLLM(
+        [_parts_resp(["XX-100-A"]), LLMError("AI service unavailable")]
+    )
+    partial = run_pdf(pdf_path, store=store, llm=failed_llm)
+
+    assert [part.part_no for part in partial.parts] == ["XX-100-A"]
+    assert partial.stopped_early is not None
+    assert "page 2" in partial.stopped_early
+    cache = store.get_pdf_cache(hash_file(pdf_path))
+    assert cache["complete"] is False
+
+    clean_llm = FakeLLM([_parts_resp(["XX-100-A"]), _parts_resp(["XX-101-A"])])
+    complete = run_pdf(pdf_path, store=store, llm=clean_llm)
+
+    assert clean_llm.call_count == 2
+    assert [part.part_no for part in complete.parts] == ["XX-100-A", "XX-101-A"]
+    assert complete.stopped_early is None
+    assert store.get_pdf_cache(hash_file(pdf_path))["complete"] is True
+
+
+def test_clean_cache_is_served_without_llm_calls(tmp_path, store, monkeypatch):
+    page = (_FIXTURES / "page_single_size.txt").read_text()
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: [page])
+    pdf_path = _make_pdf(tmp_path)
+
+    run_pdf(pdf_path, store=store, llm=FakeLLM([_parts_resp(["XX-100-A"])]))
+    cached_llm = FakeLLM([])
+    cached = run_pdf(pdf_path, store=store, llm=cached_llm)
+
+    assert cached_llm.call_count == 0
+    assert [part.part_no for part in cached.parts] == ["XX-100-A"]
+    assert store.get_pdf_cache(hash_file(pdf_path))["complete"] is True
 
 
 def test_scanned_pdf_raises_pdf_error_mentioning_scanned(tmp_path, store, monkeypatch):
@@ -136,14 +191,36 @@ def test_blank_page_skips_llm_call(tmp_path, store, monkeypatch):
     assert len(result.parts) == 2
 
 
-def test_cancel_event_aborts_run(tmp_path, store, monkeypatch):
+def test_cancel_mid_loop_returns_partial_and_writes_incomplete_cache(
+    tmp_path, store, monkeypatch
+):
     single_text = (_FIXTURES / "page_single_size.txt").read_text()
     pages = [single_text, single_text]
     monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: pages)
 
     pdf_path = _make_pdf(tmp_path)
     cancel = threading.Event()
-    cancel.set()
+    llm = FakeLLM(
+        [_parts_resp(["XX-100-A"])],
+        cancel_after_call=(cancel, 1),
+    )
 
-    with pytest.raises(PdfError, match="Cancelled"):
-        run_pdf(pdf_path, store=store, llm=FakeLLM([]), cancel=cancel)
+    result = run_pdf(pdf_path, store=store, llm=llm, cancel=cancel)
+
+    assert [part.part_no for part in result.parts] == ["XX-100-A"]
+    assert result.stopped_early is not None
+    assert "Cancelled" in result.stopped_early
+    assert store.get_pdf_cache(hash_file(pdf_path))["complete"] is False
+
+
+def test_llm_failure_on_first_content_page_raises(tmp_path, store, monkeypatch):
+    page = (_FIXTURES / "page_single_size.txt").read_text()
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: [page])
+    pdf_path = _make_pdf(tmp_path)
+
+    with pytest.raises(LLMError, match="AI service unavailable"):
+        run_pdf(
+            pdf_path,
+            store=store,
+            llm=FakeLLM([LLMError("AI service unavailable")]),
+        )
