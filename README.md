@@ -62,8 +62,10 @@ uv run pytest          # test suite (no network, no real browser)
 uv run ruff check .    # lint
 ```
 
-Live-reload while working on the GUI — restarts the app whenever a file under
-`src/` is saved (development only; end users get the frozen build):
+Live-reload while working on the GUI — launches the app immediately, then
+restarts it whenever a file under `src/` is saved, so it replaces
+`uv run python -m parts_parser` during development. Ctrl-C stops both the
+watcher and the app. (Development only; end users get the frozen build.)
 
 ```bash
 uv run --with watchfiles watchfiles 'python -m parts_parser' src
