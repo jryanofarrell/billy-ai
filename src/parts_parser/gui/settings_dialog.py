@@ -38,8 +38,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(QLabel("The key is stored only on this computer.", self))
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel,
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
             parent=self,
         )
         buttons.accepted.connect(self.accept)

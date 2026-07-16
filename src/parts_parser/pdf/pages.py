@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from parts_parser.llm import LLMClient, LLMError  # noqa: F401 — re-exported for callers
 
@@ -28,12 +28,10 @@ _SYSTEM = (
 )
 
 
-def extract_page_parts(
-    llm: LLMClient, page_text: str, page_no: int, category: str
-) -> PageResult:
+def extract_page_parts(llm: LLMClient, page_text: str, page_no: int, category: str) -> PageResult:
     """Call the LLM once to extract parts from a single catalog page."""
     user_prompt = (
-        f'Catalog category for this page: {category or "unknown"}. '
+        f"Catalog category for this page: {category or 'unknown'}. "
         f"Page {page_no} text follows.\n\n{page_text}\n\n"
         'Return {"subcategory": str, "parts": [{"part_no": str, "series": str, "description": str}], "skip_reason": str|null}. '
         'Rules: "subcategory" is the page-level heading (e.g. "BLACK IRON PIPE FITTINGS SCHEDULE 40"); '

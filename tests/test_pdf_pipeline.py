@@ -5,7 +5,7 @@ import pytest
 
 from parts_parser.output.filtering import FilterEntry, FilterSheet, MatchReport
 from parts_parser.pdf.extract import PdfError
-from parts_parser.pdf.pipeline import PdfRunResult, run_pdf
+from parts_parser.pdf.pipeline import run_pdf
 from parts_parser.store import RunStore, hash_file
 
 
@@ -52,10 +52,12 @@ def test_full_run_produces_parts_with_sequence_and_writes_cache(tmp_path, store,
     monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: pages)
 
     pdf_path = _make_pdf(tmp_path)
-    llm = FakeLLM([
-        _parts_resp(["XX-100-A", "XX-101-A"], "Compression Straight"),
-        _parts_resp(["XX-200-A", "XX-201-A"], "Compression Elbow"),
-    ])
+    llm = FakeLLM(
+        [
+            _parts_resp(["XX-100-A", "XX-101-A"], "Compression Straight"),
+            _parts_resp(["XX-200-A", "XX-201-A"], "Compression Elbow"),
+        ]
+    )
 
     result = run_pdf(pdf_path, store=store, llm=llm)
 
@@ -65,17 +67,21 @@ def test_full_run_produces_parts_with_sequence_and_writes_cache(tmp_path, store,
     assert store.get_pdf_cache(hash_file(pdf_path)) is not None
 
 
-def test_second_run_hits_cache_makes_zero_llm_calls_returns_same_parts(tmp_path, store, monkeypatch):
+def test_second_run_hits_cache_makes_zero_llm_calls_returns_same_parts(
+    tmp_path, store, monkeypatch
+):
     single_text = (_FIXTURES / "page_single_size.txt").read_text()
     two_text = (_FIXTURES / "page_two_size.txt").read_text()
     pages = [single_text, two_text]
     monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: pages)
 
     pdf_path = _make_pdf(tmp_path)
-    first_llm = FakeLLM([
-        _parts_resp(["XX-100-A", "XX-101-A"]),
-        _parts_resp(["XX-200-A", "XX-201-A"]),
-    ])
+    first_llm = FakeLLM(
+        [
+            _parts_resp(["XX-100-A", "XX-101-A"]),
+            _parts_resp(["XX-200-A", "XX-201-A"]),
+        ]
+    )
     first_result = run_pdf(pdf_path, store=store, llm=first_llm)
 
     second_llm = FakeLLM([])

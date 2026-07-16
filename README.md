@@ -16,10 +16,10 @@ uv run playwright install chromium   # one-time, for website runs
 uv run python -m parts_parser        # opens the GUI
 ```
 
-In the window: paste a website address **or** drop a catalog PDF, optionally drop an
-Excel part list to filter by, and hit Run. The output workbook lands next to the PDF
-(or in `~/Downloads` for web runs) and contains a `Parts` sheet plus a `Match Report`
-sheet when a filter was supplied.
+In the window: pick Website or PDF catalog, provide the address or drop the PDF,
+optionally drop an Excel part list to filter by, and hit Run. The output workbook
+lands in `~/Downloads` and contains a `Parts` sheet plus a `Match Report` sheet when
+a filter was supplied.
 
 **API key:** PDF parsing calls an LLM (~$1–2 per catalog, once — results are cached by
 file hash). Set `OPENAI_API_KEY` or paste a key into Settings. Website runs against

@@ -51,9 +51,7 @@ def assert_pyinstaller_available() -> None:
 
 def assert_bundled_chromium() -> None:
     """Verify that PyInstaller copied Playwright's local browser installation."""
-    browser_directories = [
-        path for path in APP_DIR.rglob(".local-browsers") if path.is_dir()
-    ]
+    browser_directories = [path for path in APP_DIR.rglob(".local-browsers") if path.is_dir()]
     if not any(any(path.iterdir()) for path in browser_directories):
         raise RuntimeError(
             "Chromium was not included in the packaged application. "
@@ -80,9 +78,7 @@ def build() -> Path:
     )
     assert_bundled_chromium()
 
-    archive_base = DIST_DIR / (
-        f"PartsCatalogParser-{project_version()}-{platform_name()}"
-    )
+    archive_base = DIST_DIR / (f"PartsCatalogParser-{project_version()}-{platform_name()}")
     archive_path = Path(
         shutil.make_archive(
             str(archive_base),

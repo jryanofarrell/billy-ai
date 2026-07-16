@@ -13,19 +13,18 @@ from parts_parser.pdf.extract import PdfError  # noqa: E402
 def test_output_path_for_url_uses_downloads_and_domain(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
 
-    output_path = output_path_for(
-        "https://catalog.example.com/products/fittings", is_url=True
-    )
+    output_path = output_path_for("https://catalog.example.com/products/fittings", is_url=True)
 
     assert output_path == tmp_path / "Downloads" / "catalog.example.com-parts.xlsx"
 
 
-def test_output_path_for_pdf_uses_sibling_parts_suffix(tmp_path):
-    pdf_path = tmp_path / "synthetic catalog.pdf"
+def test_output_path_for_pdf_uses_downloads_and_stem(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    pdf_path = tmp_path / "somewhere else" / "synthetic catalog.pdf"
 
     output_path = output_path_for(str(pdf_path), is_url=False)
 
-    assert output_path == tmp_path / "synthetic catalog-parts.xlsx"
+    assert output_path == tmp_path / "Downloads" / "synthetic catalog-parts.xlsx"
 
 
 def test_output_path_for_uses_next_available_collision_number(tmp_path, monkeypatch):
@@ -43,6 +42,7 @@ def test_output_path_for_uses_next_available_collision_number(tmp_path, monkeypa
 
 
 def test_worker_success_emits_written_path_and_part_count(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     pdf_path = tmp_path / "catalog.pdf"
     parts = [object(), object()]
     result = SimpleNamespace(parts=parts, match_report=None)
@@ -60,9 +60,10 @@ def test_worker_success_emits_written_path_and_part_count(tmp_path, monkeypatch)
 
     worker.run()
 
-    expected_path = tmp_path / "catalog-parts.xlsx"
+    expected_path = tmp_path / "Downloads" / "catalog-parts.xlsx"
     assert succeeded == [(str(expected_path), 2)]
     assert writes == [((parts, expected_path), {"mode": "pdf", "match_report": None})]
+    assert expected_path.parent.is_dir()  # worker creates Downloads when missing
 
 
 def test_worker_pdf_error_emits_plain_language_message(tmp_path, monkeypatch):
@@ -73,9 +74,7 @@ def test_worker_pdf_error_emits_plain_language_message(tmp_path, monkeypatch):
         raise PdfError(message)
 
     monkeypatch.setattr(worker_module, "run_pdf", fail_pdf)
-    worker = PipelineWorker(
-        url=None, pdf_path=str(tmp_path / "catalog.pdf"), filter_path=None
-    )
+    worker = PipelineWorker(url=None, pdf_path=str(tmp_path / "catalog.pdf"), filter_path=None)
     failed = []
     worker.failed.connect(failed.append)
 
@@ -91,9 +90,7 @@ def test_worker_unexpected_error_emits_exception_type(monkeypatch):
         raise ValueError("internal detail")
 
     monkeypatch.setattr(worker_module, "run_web", fail_web)
-    worker = PipelineWorker(
-        url="https://example.com/catalog", pdf_path=None, filter_path=None
-    )
+    worker = PipelineWorker(url="https://example.com/catalog", pdf_path=None, filter_path=None)
     failed = []
     worker.failed.connect(failed.append)
 

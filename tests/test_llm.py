@@ -23,9 +23,7 @@ def test_complete_json_returns_parsed_object(monkeypatch):
     response = SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(content='{"a": 1}'))]
     )
-    monkeypatch.setattr(
-        client._client.chat.completions, "create", lambda **kwargs: response
-    )
+    monkeypatch.setattr(client._client.chat.completions, "create", lambda **kwargs: response)
 
     result = client.complete_json(system="Return JSON.", user="Synthetic prompt")
 
@@ -37,9 +35,7 @@ def test_complete_json_raises_llm_error_for_invalid_json(monkeypatch):
     response = SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(content="not json"))]
     )
-    monkeypatch.setattr(
-        client._client.chat.completions, "create", lambda **kwargs: response
-    )
+    monkeypatch.setattr(client._client.chat.completions, "create", lambda **kwargs: response)
 
     with pytest.raises(LLMError):
         client.complete_json(system="Return JSON.", user="Synthetic prompt")

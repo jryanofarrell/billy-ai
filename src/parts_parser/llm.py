@@ -11,9 +11,7 @@ class LLMError(Exception):
 
 
 class LLMClient(Protocol):
-    def complete_json(
-        self, *, system: str, user: str, max_output_tokens: int = 4096
-    ) -> dict:
+    def complete_json(self, *, system: str, user: str, max_output_tokens: int = 4096) -> dict:
         """Return a JSON object produced from the supplied prompts."""
         ...
 
@@ -23,9 +21,7 @@ class OpenAIClient:
         self._client = openai.OpenAI(api_key=api_key)
         self._model = model
 
-    def complete_json(
-        self, *, system: str, user: str, max_output_tokens: int = 4096
-    ) -> dict:
+    def complete_json(self, *, system: str, user: str, max_output_tokens: int = 4096) -> dict:
         try:
             response = self._client.chat.completions.create(
                 model=self._model,
@@ -53,8 +49,6 @@ class OpenAIClient:
 def get_client(settings: Settings | None = None) -> LLMClient:
     settings = settings or load_settings()
     if not settings.openai_api_key:
-        raise LLMError(
-            "No API key is set. Open Settings and paste your OpenAI API key."
-        )
+        raise LLMError("No API key is set. Open Settings and paste your OpenAI API key.")
 
     return OpenAIClient(api_key=settings.openai_api_key, model=settings.model)

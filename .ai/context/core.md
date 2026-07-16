@@ -84,10 +84,13 @@ all candidates rather than selecting one.
 
 ## Output path convention
 
-Web runs write `<domain>-parts.xlsx` to the user's `Downloads` directory. PDF
-runs write `<pdf-stem>-parts.xlsx` beside the source PDF. If the chosen path
-already exists, the app preserves it and selects the next available path by
-adding ` (2)`, ` (3)`, and so on before the `.xlsx` extension.
+All runs write to the user's `Downloads` directory: `<domain>-parts.xlsx` for
+web runs, `<pdf-stem>-parts.xlsx` for PDF runs. If the chosen path already
+exists, the app preserves it and selects the next available path by adding
+` (2)`, ` (3)`, and so on before the `.xlsx` extension. The worksheet column
+holding a part's description text is headed "Size" (warehouse vocabulary) in
+both modes; internally the field remains `PartRecord.description` because the
+PDF cache stores that key.
 
 ## Build
 

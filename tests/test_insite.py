@@ -102,10 +102,12 @@ def test_iter_leaf_categories_yields_node(categories):
 
 
 def test_list_category_products_yields_all(products_page1, products_page2):
-    session = FakeSession({
-        "&page=1": products_page1,
-        "&page=2": products_page2,
-    })
+    session = FakeSession(
+        {
+            "&page=1": products_page1,
+            "&page=2": products_page2,
+        }
+    )
     products = list(list_category_products(session, "https://example.com", "cat-1-1-1"))
     assert len(products) == 4
     part_nos = {p["productNumber"] for p in products}
@@ -113,10 +115,12 @@ def test_list_category_products_yields_all(products_page1, products_page2):
 
 
 def test_list_category_products_fetches_each_page_once(products_page1, products_page2):
-    session = FakeSession({
-        "&page=1": products_page1,
-        "&page=2": products_page2,
-    })
+    session = FakeSession(
+        {
+            "&page=1": products_page1,
+            "&page=2": products_page2,
+        }
+    )
     list(list_category_products(session, "https://example.com", "cat-1-1-1"))
     assert sum(1 for c in session.calls if "&page=1" in c) == 1
     assert sum(1 for c in session.calls if "&page=2" in c) == 1
@@ -128,6 +132,7 @@ def test_list_category_products_fetches_each_page_once(products_page1, products_
 def test_product_to_record_verbatim_part_no(product_detail):
     record = product_to_record(product_detail, ["Brass Fittings", "Pipe", "90-Deg Female Elbow"])
     assert record.part_no == "28002"
+    assert record.description == product_detail.get("productTitle", "")
 
 
 def test_product_to_record_breadcrumb_category(product_detail):

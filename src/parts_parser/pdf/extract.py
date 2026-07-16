@@ -18,9 +18,7 @@ def extract_text(path: Path) -> list[str]:
         ) from error
 
 
-def is_digital(
-    pages: list[str], *, min_mean_chars: int = 200, sample: int = 20
-) -> bool:
+def is_digital(pages: list[str], *, min_mean_chars: int = 200, sample: int = 20) -> bool:
     """Return whether sampled pages contain enough text to be digitally readable."""
     sampled_pages = pages[:sample]
     if not sampled_pages:

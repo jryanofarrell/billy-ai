@@ -3,9 +3,13 @@
 ## Prerequisites
 
 - Install [uv](https://docs.astral.sh/uv/).
-- Run the build on Windows to produce a Windows executable. If you do not have a
-  Windows build machine, run the GitHub Actions `build` workflow and download its
-  `PartsCatalogParser-windows` artifact instead.
+- Run the build on Windows to produce a Windows executable. PyInstaller does not
+  cross-compile: the bundle packages the Python runtime, Qt, and Chromium native
+  binaries of the platform it runs on, so a Windows app can only be assembled on
+  Windows. If you do not have a Windows build machine, run the GitHub Actions
+  `build` workflow (which runs on `windows-latest` for exactly this reason) and
+  download its `PartsCatalogParser-windows` artifact instead — no local Windows
+  machine is ever required.
 
 From the repository root, run:
 

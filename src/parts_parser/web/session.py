@@ -38,9 +38,7 @@ class BrowserSession:
             or "just a moment" in title.lower()
             or "you have been blocked" in body.lower()
         ):
-            raise WebError(
-                "The website is blocking automated access. Try again in a few minutes."
-            )
+            raise WebError("The website is blocking automated access. Try again in a few minutes.")
 
     def get_json(self, url: str) -> dict:
         assert self._context is not None, "Call __enter__ first"

@@ -34,9 +34,7 @@ def test_hallucinated_part_dropped_and_reported():
 def test_part_number_with_internal_space_survives_whitespace_collapsed_check():
     # "HAB-NOSE BOX-1" should match because whitespace-collapsed check squashes both
     pages_text = ["HAB-NOSEBOX-1 is listed here"]
-    page_result = _make_result(
-        1, [RawPart(part_no="HAB-NOSE BOX-1", series="", description="")]
-    )
+    page_result = _make_result(1, [RawPart(part_no="HAB-NOSE BOX-1", series="", description="")])
     sections = [Section(name="S1", category="Fittings", start_page=1, end_page=1)]
 
     parts, report = validate_parts([page_result], pages_text, sections)

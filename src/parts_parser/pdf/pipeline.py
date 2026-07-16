@@ -48,9 +48,7 @@ def run_pdf(
 
         toc_idx = find_toc_pages(pages)
         sections = (
-            parse_toc(llm, "\n".join(pages[i] for i in toc_idx), len(pages))
-            if toc_idx
-            else []
+            parse_toc(llm, "\n".join(pages[i] for i in toc_idx), len(pages)) if toc_idx else []
         )
 
         page_results: list[PageResult] = []

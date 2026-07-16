@@ -10,18 +10,14 @@ PAGE_SIZE = 48
 
 def detect(session: Any, base: str) -> bool:
     try:
-        data = session.get_json(
-            f"{base}/api/v1/websites/current?expand=languages%2Ccurrencies"
-        )
+        data = session.get_json(f"{base}/api/v1/websites/current?expand=languages%2Ccurrencies")
         return isinstance(data, dict) and ("id" in data or "websiteId" in data)
     except WebError:
         return False
 
 
 def get_category_tree(session: Any, base: str) -> list[dict]:
-    data = session.get_json(
-        f"{base}/api/v1/categories/?maxDepth=3&includeStartCategory=false"
-    )
+    data = session.get_json(f"{base}/api/v1/categories/?maxDepth=3&includeStartCategory=false")
     return data["categories"]
 
 
@@ -40,9 +36,7 @@ def iter_leaf_categories(
     yield from _walk(tree, [])
 
 
-def list_category_products(
-    session: Any, base: str, category_id: str
-) -> Iterator[dict]:
+def list_category_products(session: Any, base: str, category_id: str) -> Iterator[dict]:
     page = 1
     while True:
         data = session.get_json(
@@ -78,9 +72,7 @@ def product_to_record(product: dict, breadcrumb: list[str]) -> PartRecord:
     series = " / ".join(breadcrumb[2:]) if len(breadcrumb) > 2 else ""
 
     attributes = {
-        t["label"]: ", ".join(
-            v["valueDisplay"] for v in (t.get("attributeValues") or [])
-        )
+        t["label"]: ", ".join(v["valueDisplay"] for v in (t.get("attributeValues") or []))
         for t in (product.get("attributeTypes") or [])
     }
 
@@ -89,5 +81,6 @@ def product_to_record(product: dict, breadcrumb: list[str]) -> PartRecord:
         category=category,
         subcategory=subcategory,
         series=series,
+        description=product.get("productTitle") or "",
         attributes=attributes,
     )

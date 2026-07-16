@@ -128,9 +128,7 @@ def match_parts(
                 match_type = "normalized"
             else:
                 match_type = "collision"
-                note = (
-                    f"{len(matched)} different source part numbers normalize to the same value"
-                )
+                note = f"{len(matched)} different source part numbers normalize to the same value"
         else:
             match_type = "unmatched"
             matched = []

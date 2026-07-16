@@ -20,7 +20,7 @@ def output_path_for(source: str, *, is_url: bool) -> Path:
         candidate = Path.home() / "Downloads" / f"{domain}-parts.xlsx"
     else:
         pdf_path = Path(source)
-        candidate = pdf_path.parent / f"{pdf_path.stem}-parts.xlsx"
+        candidate = Path.home() / "Downloads" / f"{pdf_path.stem}-parts.xlsx"
 
     if not candidate.exists():
         return candidate
@@ -69,29 +69,15 @@ class PipelineWorker(QThread):
                 self.progressed.emit(message, percent)
 
             if self._url is not None:
-                result = run_web(
-                    self._url,
-                    store=store,
-                    filter_sheet=filter_sheet,
-                    progress=report_progress,
-                    cancel=self._cancel,
-                )
-                output_path = output_path_for(self._url, is_url=True)
+                result, output_path = self._run_web_job(store, filter_sheet, report_progress)
                 mode = "web"
             elif self._pdf_path is not None:
-                pdf_path = Path(self._pdf_path)
-                result = run_pdf(
-                    pdf_path,
-                    store=store,
-                    filter_sheet=filter_sheet,
-                    progress=report_progress,
-                    cancel=self._cancel,
-                )
-                output_path = output_path_for(self._pdf_path, is_url=False)
+                result, output_path = self._run_pdf_job(store, filter_sheet, report_progress)
                 mode = "pdf"
             else:
                 raise OutputError("Choose a website or PDF catalog to parse.")
 
+            output_path.parent.mkdir(parents=True, exist_ok=True)
             write_workbook(
                 result.parts,
                 output_path,
@@ -102,6 +88,24 @@ class PipelineWorker(QThread):
         except (WebError, PdfError, LLMError, OutputError) as error:
             self.failed.emit(str(error))
         except Exception as error:
-            self.failed.emit(
-                f"Something went wrong ({type(error).__name__}). Please try again."
-            )
+            self.failed.emit(f"Something went wrong ({type(error).__name__}). Please try again.")
+
+    def _run_web_job(self, store, filter_sheet, progress):
+        result = run_web(
+            self._url,
+            store=store,
+            filter_sheet=filter_sheet,
+            progress=progress,
+            cancel=self._cancel,
+        )
+        return result, output_path_for(self._url, is_url=True)
+
+    def _run_pdf_job(self, store, filter_sheet, progress):
+        result = run_pdf(
+            Path(self._pdf_path),
+            store=store,
+            filter_sheet=filter_sheet,
+            progress=progress,
+            cancel=self._cancel,
+        )
+        return result, output_path_for(self._pdf_path, is_url=False)

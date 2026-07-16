@@ -100,10 +100,12 @@ def run_web(
             }
 
         store.save_site_config(domain, config)
-        store.record_run({
-            "source": domain,
-            "kind": "web",
-            "mode": "filter" if filter_sheet else "crawl",
-            "parts": len(result.parts),
-        })
+        store.record_run(
+            {
+                "source": domain,
+                "kind": "web",
+                "mode": "filter" if filter_sheet else "crawl",
+                "parts": len(result.parts),
+            }
+        )
         return result

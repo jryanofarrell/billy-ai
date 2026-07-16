@@ -138,9 +138,7 @@ def test_match_parts_deduplicates_matches_in_source_order():
         PartRecord(part_no="SECOND"),
     ]
 
-    matched_parts, report = match_parts(
-        _filter_sheet("FIRST", "SECOND", "SECOND"), parts
-    )
+    matched_parts, report = match_parts(_filter_sheet("FIRST", "SECOND", "SECOND"), parts)
 
     assert [part.part_no for part in matched_parts] == ["SECOND", "FIRST"]
     assert [result.match_type for result in report.results] == ["exact", "exact", "exact"]

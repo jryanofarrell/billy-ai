@@ -51,8 +51,7 @@ def _factory(session: FakeSession):
 
 def _filter_sheet(*raw_keys: str) -> FilterSheet:
     entries = [
-        FilterEntry(raw=k, normalized=normalize_key(k), row=i + 1)
-        for i, k in enumerate(raw_keys)
+        FilterEntry(raw=k, normalized=normalize_key(k), row=i + 1) for i, k in enumerate(raw_keys)
     ]
     return FilterSheet(path=Path("fake.xlsx"), column_label="column A", entries=entries)
 
@@ -87,11 +86,13 @@ def page2_data():
 
 def test_filter_mode_keeps_only_normalized_equal_hits(tmp_path, search_data, catalogpages_data):
     """Near-miss products (28002-LF, 128002) are excluded; only exact-normalized match passes."""
-    session = FakeSession({
-        "websites/current": {"id": "site-1"},
-        "search": search_data,
-        "catalogpages": catalogpages_data,
-    })
+    session = FakeSession(
+        {
+            "websites/current": {"id": "site-1"},
+            "search": search_data,
+            "catalogpages": catalogpages_data,
+        }
+    )
     result = run_web(
         "https://example.com/",
         store=RunStore(root=tmp_path),
@@ -106,11 +107,13 @@ def test_filter_mode_keeps_only_normalized_equal_hits(tmp_path, search_data, cat
 
 def test_filter_mode_fetches_each_breadcrumb_once(tmp_path, search_data, catalogpages_data):
     """Two entries resolving to the same product trigger exactly one catalogpages call."""
-    session = FakeSession({
-        "websites/current": {"id": "site-1"},
-        "search": search_data,
-        "catalogpages": catalogpages_data,
-    })
+    session = FakeSession(
+        {
+            "websites/current": {"id": "site-1"},
+            "search": search_data,
+            "catalogpages": catalogpages_data,
+        }
+    )
     run_web(
         "https://example.com/",
         store=RunStore(root=tmp_path),
@@ -125,12 +128,14 @@ def test_filter_mode_fetches_each_breadcrumb_once(tmp_path, search_data, catalog
 
 
 def test_crawl_mode_makes_no_catalogpages_calls(tmp_path, categories_data, page1_data, page2_data):
-    session = FakeSession({
-        "websites/current": {"id": "site-1"},
-        "categories": categories_data,
-        "&page=1": page1_data,
-        "&page=2": page2_data,
-    })
+    session = FakeSession(
+        {
+            "websites/current": {"id": "site-1"},
+            "categories": categories_data,
+            "&page=1": page1_data,
+            "&page=2": page2_data,
+        }
+    )
     run_web(
         "https://example.com/",
         store=RunStore(root=tmp_path),
@@ -140,12 +145,14 @@ def test_crawl_mode_makes_no_catalogpages_calls(tmp_path, categories_data, page1
 
 
 def test_crawl_mode_fills_category_from_tree(tmp_path, categories_data, page1_data, page2_data):
-    session = FakeSession({
-        "websites/current": {"id": "site-1"},
-        "categories": categories_data,
-        "&page=1": page1_data,
-        "&page=2": page2_data,
-    })
+    session = FakeSession(
+        {
+            "websites/current": {"id": "site-1"},
+            "categories": categories_data,
+            "&page=1": page1_data,
+            "&page=2": page2_data,
+        }
+    )
     result = run_web(
         "https://example.com/",
         store=RunStore(root=tmp_path),
@@ -176,15 +183,20 @@ def test_unsupported_site_raises_readable_web_error(tmp_path):
 
 def test_cached_matching_probe_skips_detect(tmp_path, categories_data):
     store = RunStore(root=tmp_path)
-    store.save_site_config("example.com", {
-        "platform": "insite",
-        "probe": {"product_id": "prod-1", "part_no": "28001"},
-    })
-    session = FakeSession({
-        "products/prod-1": _SINGLE_PAGE_PRODUCTS["products"][0],
-        "categories": categories_data,
-        "&page=1": _SINGLE_PAGE_PRODUCTS,
-    })
+    store.save_site_config(
+        "example.com",
+        {
+            "platform": "insite",
+            "probe": {"product_id": "prod-1", "part_no": "28001"},
+        },
+    )
+    session = FakeSession(
+        {
+            "products/prod-1": _SINGLE_PAGE_PRODUCTS["products"][0],
+            "categories": categories_data,
+            "&page=1": _SINGLE_PAGE_PRODUCTS,
+        }
+    )
     run_web(
         "https://example.com/",
         store=store,
@@ -195,17 +207,27 @@ def test_cached_matching_probe_skips_detect(tmp_path, categories_data):
 
 def test_cached_mismatched_probe_re_detects(tmp_path, categories_data):
     store = RunStore(root=tmp_path)
-    store.save_site_config("example.com", {
-        "platform": "insite",
-        "probe": {"product_id": "prod-1", "part_no": "28001"},
-    })
+    store.save_site_config(
+        "example.com",
+        {
+            "platform": "insite",
+            "probe": {"product_id": "prod-1", "part_no": "28001"},
+        },
+    )
     # Probe returns a different part_no → cache invalidated → detect runs
-    session = FakeSession({
-        "products/prod-1": {"productNumber": "WRONG", "id": "prod-1", "urlSegment": "s", "attributeTypes": []},
-        "websites/current": {"id": "site-1"},
-        "categories": categories_data,
-        "&page=1": _SINGLE_PAGE_PRODUCTS,
-    })
+    session = FakeSession(
+        {
+            "products/prod-1": {
+                "productNumber": "WRONG",
+                "id": "prod-1",
+                "urlSegment": "s",
+                "attributeTypes": [],
+            },
+            "websites/current": {"id": "site-1"},
+            "categories": categories_data,
+            "&page=1": _SINGLE_PAGE_PRODUCTS,
+        }
+    )
     run_web(
         "https://example.com/",
         store=store,
@@ -219,11 +241,13 @@ def test_cached_mismatched_probe_re_detects(tmp_path, categories_data):
 
 def test_record_run_filter_mode(tmp_path, search_data, catalogpages_data):
     store = RunStore(root=tmp_path)
-    session = FakeSession({
-        "websites/current": {"id": "site-1"},
-        "search": search_data,
-        "catalogpages": catalogpages_data,
-    })
+    session = FakeSession(
+        {
+            "websites/current": {"id": "site-1"},
+            "search": search_data,
+            "catalogpages": catalogpages_data,
+        }
+    )
     run_web(
         "https://example.com/",
         store=store,
@@ -238,12 +262,14 @@ def test_record_run_filter_mode(tmp_path, search_data, catalogpages_data):
 
 def test_record_run_crawl_mode(tmp_path, categories_data, page1_data, page2_data):
     store = RunStore(root=tmp_path)
-    session = FakeSession({
-        "websites/current": {"id": "site-1"},
-        "categories": categories_data,
-        "&page=1": page1_data,
-        "&page=2": page2_data,
-    })
+    session = FakeSession(
+        {
+            "websites/current": {"id": "site-1"},
+            "categories": categories_data,
+            "&page=1": page1_data,
+            "&page=2": page2_data,
+        }
+    )
     run_web(
         "https://example.com/",
         store=store,
@@ -259,11 +285,13 @@ def test_record_run_crawl_mode(tmp_path, categories_data, page1_data, page2_data
 
 
 def test_cancel_aborts_with_web_error(tmp_path, categories_data):
-    session = FakeSession({
-        "websites/current": {"id": "site-1"},
-        "categories": categories_data,
-        "&page=1": _SINGLE_PAGE_PRODUCTS,
-    })
+    session = FakeSession(
+        {
+            "websites/current": {"id": "site-1"},
+            "categories": categories_data,
+            "&page=1": _SINGLE_PAGE_PRODUCTS,
+        }
+    )
     cancel = threading.Event()
     cancel.set()
     with pytest.raises(WebError, match="Cancelled"):

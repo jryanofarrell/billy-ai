@@ -121,9 +121,7 @@ class DropZone(QFrame):
 
     def _set_highlighted(self, highlighted: bool) -> None:
         color = "#2f80ed" if highlighted else "#888888"
-        self.setStyleSheet(
-            f"DropZone {{ border: 1px dashed {color}; border-radius: 4px; }}"
-        )
+        self.setStyleSheet(f"DropZone {{ border: 1px dashed {color}; border-radius: 4px; }}")
 
     @staticmethod
     def _normalize_extension(extension: str) -> str:

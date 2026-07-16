@@ -1,22 +1,24 @@
 """Main window for the parts catalog parser desktop application."""
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QUrl
 from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
+    QComboBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from parts_parser.gui.drop_zone import DropZone
 from parts_parser.gui.settings_dialog import SettingsDialog
+from parts_parser.gui.source_panels import PdfPanel, UrlPanel
 from parts_parser.gui.worker import PipelineWorker
 
 
@@ -36,27 +38,19 @@ class MainWindow(QMainWindow):
 
         source_group = QGroupBox("Source", central_widget)
         source_layout = QVBoxLayout(source_group)
-        source_layout.addWidget(QLabel("Website address:", source_group))
-        self.url_edit = QLineEdit(source_group)
-        self.url_edit.setPlaceholderText("https://example.com")
-        source_layout.addWidget(self.url_edit)
+        self.mode_selector = QComboBox(source_group)
+        self.mode_selector.addItems(["Website", "PDF catalog"])
+        source_layout.addWidget(self.mode_selector)
 
-        or_label = QLabel("— or —", source_group)
-        or_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        or_label.setStyleSheet("color: gray;")
-        source_layout.addWidget(or_label)
-
-        self.pdf_zone = DropZone(
-            extensions=(".pdf",),
-            prompt="Drop a catalog PDF here, or click to browse",
-            parent=source_group,
-        )
-        source_layout.addWidget(self.pdf_zone)
+        self.url_panel = UrlPanel(source_group)
+        self.pdf_panel = PdfPanel(source_group)
+        self.source_stack = QStackedWidget(source_group)
+        self.source_stack.addWidget(self.url_panel)
+        self.source_stack.addWidget(self.pdf_panel)
+        source_layout.addWidget(self.source_stack)
         layout.addWidget(source_group)
 
-        filter_group = QGroupBox(
-            "Only include parts from a list (optional)", central_widget
-        )
+        filter_group = QGroupBox("Only include parts from a list (optional)", central_widget)
         filter_layout = QVBoxLayout(filter_group)
         self.filter_zone = DropZone(
             extensions=(".xlsx", ".xls"),
@@ -91,9 +85,9 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         self._create_menu()
 
-        self.url_edit.textEdited.connect(self._url_edited)
-        self.pdf_zone.fileSelected.connect(self._pdf_selected)
-        self.pdf_zone.cleared.connect(self._update_run_enabled)
+        self.mode_selector.currentIndexChanged.connect(self._mode_changed)
+        self.url_panel.sourceChanged.connect(self._update_run_enabled)
+        self.pdf_panel.sourceChanged.connect(self._update_run_enabled)
         self.run_button.clicked.connect(self._start_run)
         self.cancel_button.clicked.connect(self._cancel_run)
         self.open_button.clicked.connect(self._open_output)
@@ -111,24 +105,24 @@ class MainWindow(QMainWindow):
     def _open_settings(self) -> None:
         SettingsDialog(self).exec()
 
-    def _url_edited(self, text: str) -> None:
-        if text.strip():
-            self.pdf_zone.clear()
+    def _mode_changed(self, index: int) -> None:
+        self.source_stack.setCurrentIndex(index)
         self._update_run_enabled()
 
-    def _pdf_selected(self, _path: str) -> None:
-        self.url_edit.clear()
-        self._update_run_enabled()
+    def _active_source(self) -> tuple[str | None, str | None]:
+        """Return (url, pdf_path) for the currently selected mode."""
+        if self.mode_selector.currentIndex() == 0:
+            return self.url_panel.source, None
+        return None, self.pdf_panel.source
 
     def _update_run_enabled(self) -> None:
-        has_url = bool(self.url_edit.text().strip())
-        has_pdf = self.pdf_zone.path is not None
-        self.run_button.setEnabled((has_url != has_pdf) and self._worker is None)
+        url, pdf_path = self._active_source()
+        has_source = url is not None or pdf_path is not None
+        self.run_button.setEnabled(has_source and self._worker is None)
 
     def _start_run(self) -> None:
-        url = self.url_edit.text().strip() or None
-        pdf_path = self.pdf_zone.path
-        if (url is None) == (pdf_path is None):
+        url, pdf_path = self._active_source()
+        if url is None and pdf_path is None:
             return
 
         self.open_button.hide()
@@ -192,7 +186,8 @@ class MainWindow(QMainWindow):
         self._update_run_enabled()
 
     def _set_inputs_enabled(self, enabled: bool) -> None:
-        self.url_edit.setEnabled(enabled)
-        self.pdf_zone.setEnabled(enabled)
+        self.mode_selector.setEnabled(enabled)
+        self.url_panel.setEnabled(enabled)
+        self.pdf_panel.setEnabled(enabled)
         self.filter_zone.setEnabled(enabled)
         self.run_button.setEnabled(enabled)
