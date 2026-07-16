@@ -67,6 +67,9 @@ class MainWindow(QMainWindow):
         self.cancel_button = QPushButton("Cancel", central_widget)
         self.cancel_button.hide()
         button_layout.addWidget(self.cancel_button)
+        button_layout.addStretch(1)
+        self.settings_button = QPushButton("Settings…", central_widget)
+        button_layout.addWidget(self.settings_button)
         layout.addLayout(button_layout)
 
         self.progress_bar = QProgressBar(central_widget)
@@ -90,6 +93,7 @@ class MainWindow(QMainWindow):
         self.pdf_panel.sourceChanged.connect(self._update_run_enabled)
         self.run_button.clicked.connect(self._start_run)
         self.cancel_button.clicked.connect(self._cancel_run)
+        self.settings_button.clicked.connect(self._open_settings)
         self.open_button.clicked.connect(self._open_output)
 
     def _create_menu(self) -> None:
@@ -191,3 +195,4 @@ class MainWindow(QMainWindow):
         self.pdf_panel.setEnabled(enabled)
         self.filter_zone.setEnabled(enabled)
         self.run_button.setEnabled(enabled)
+        self.settings_button.setEnabled(enabled)
