@@ -962,3 +962,79 @@ def test_cancel_after_collection_returns_partial_result(tmp_path, categories_dat
     assert [part.part_no for part in result.parts] == ["28001"]
     assert result.stopped_early is not None
     assert "Cancelled" in result.stopped_early
+
+
+# --- detection order ---
+
+
+def test_resolve_site_config_insite_wins_when_both_detect(tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline_module.insite, "detect", lambda session, base: True)
+    monkeypatch.setattr(pipeline_module.magento, "detect", lambda session, base: True)
+
+    resolved = resolve_site_config(
+        FakeSession(),
+        RunStore(root=tmp_path),
+        "example.com",
+        "https://example.com",
+        llm_factory=lambda: FakeLLM([]),
+        confirm=None,
+        progress=lambda message, fraction: None,
+    )
+
+    assert resolved.platform == "insite"
+
+
+def test_resolve_site_config_magento_wins_when_insite_misses(tmp_path, monkeypatch):
+    discover_calls = []
+    monkeypatch.setattr(pipeline_module.insite, "detect", lambda session, base: False)
+    monkeypatch.setattr(pipeline_module.magento, "detect", lambda session, base: True)
+    monkeypatch.setattr(pipeline_module.magento, "get_category_tree", lambda session, base: {})
+    monkeypatch.setattr(pipeline_module.magento, "iter_leaf_categories", lambda tree: iter([]))
+    monkeypatch.setattr(
+        pipeline_module,
+        "discover_site_config",
+        lambda *args: discover_calls.append(args) or _generic_config(),
+    )
+
+    resolved = resolve_site_config(
+        FakeSession(),
+        RunStore(root=tmp_path),
+        "example.com",
+        "https://example.com",
+        llm_factory=lambda: FakeLLM([]),
+        confirm=None,
+        progress=lambda message, fraction: None,
+    )
+
+    assert resolved.platform == "magento"
+    assert len(discover_calls) == 0
+
+
+def test_resolve_site_config_falls_through_to_discover_when_both_miss(tmp_path, monkeypatch):
+    discover_calls = []
+    monkeypatch.setattr(pipeline_module.insite, "detect", lambda session, base: False)
+    monkeypatch.setattr(pipeline_module.magento, "detect", lambda session, base: False)
+    monkeypatch.setattr(
+        pipeline_module,
+        "discover_site_config",
+        lambda *args: discover_calls.append(args) or _generic_config(),
+    )
+    sample = GenericPartRecord("P-1", "https://example.com/products/P-1")
+    monkeypatch.setattr(
+        pipeline_module,
+        "validate_site_config",
+        lambda *args: ConfigValidation([sample], []),
+    )
+
+    resolved = resolve_site_config(
+        FakeSession(),
+        RunStore(root=tmp_path),
+        "example.com",
+        "https://example.com",
+        llm_factory=lambda: FakeLLM([]),
+        confirm=None,
+        progress=lambda message, fraction: None,
+    )
+
+    assert resolved.platform == "generic"
+    assert len(discover_calls) == 1
