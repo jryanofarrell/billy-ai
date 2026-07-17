@@ -10,7 +10,7 @@ from parts_parser.llm import LLMClient, get_client
 from parts_parser.models import PartRecord
 from parts_parser.output.filtering import FilterSheet, MatchReport, match_parts, normalize_key
 from parts_parser.store import RunStore
-from parts_parser.web import insite
+from parts_parser.web import insite, magento
 from parts_parser.web.discovery import discover_site_config, validate_site_config
 from parts_parser.web.generic import (
     PartRecord as GenericPartRecord,
@@ -81,6 +81,66 @@ def collect_insite_crawl(
         yield category_id, records
 
 
+def collect_magento_crawl(
+    session,
+    base: str,
+    *,
+    skip_keys: set[str],
+    progress: Callable[[str, float], None],
+    cancel: threading.Event | None,
+    on_product: Callable[[dict], None] = lambda product: None,
+    on_unit: Callable[[str], None] = lambda unit: None,
+    attribute_selectors: dict | None = None,
+) -> Iterator[tuple[str, list[PartRecord]]]:
+    """Yield each completed Magento leaf category and its part records."""
+    tree = magento.get_category_tree(session, base)
+    leaves = list(magento.iter_leaf_categories(tree))
+    seen: set[str] = set()
+    attr_config = (
+        SiteConfig(
+            platform="generic",
+            selectors={"part_no": "h1", "attributes": attribute_selectors},
+        )
+        if attribute_selectors
+        else None
+    )
+
+    for index, (name_path, leaf) in enumerate(leaves):
+        category_id = str(leaf["id"])
+        if category_id in skip_keys:
+            continue
+        if cancel and cancel.is_set():
+            raise _Cancelled
+
+        category_name = " / ".join(name_path)
+        on_unit(category_name)
+        progress(f"Reading {category_name}…", index / len(leaves))
+        records: list[PartRecord] = []
+        for product in magento.list_category_products(session, base, category_id):
+            on_product(product)
+            sku = product["sku"]
+            if sku not in seen:
+                seen.add(sku)
+                attributes: dict[str, str] = {}
+                if attr_config is not None:
+                    canonical = product.get("canonical_url", "")
+                    if canonical:
+                        product_url = (
+                            canonical
+                            if canonical.startswith("http")
+                            else f"{base}/{canonical.lstrip('/')}"
+                        )
+                        try:
+                            html = session.get_html(product_url)
+                            page_record = parse_product_page(html, product_url, attr_config)
+                            if page_record is not None:
+                                attributes = page_record.attributes
+                        except WebError:
+                            pass
+                records.append(magento.product_to_record(product, name_path, attributes))
+        yield category_id, records
+
+
 def resolve_site_config(
     session,
     store: RunStore,
@@ -124,6 +184,31 @@ def resolve_site_config(
 
     if insite.detect(session, base):
         return SiteConfig(platform="insite")
+
+    if magento.detect(session, base):
+        progress("Discovering Magento attribute selectors…", -1.0)
+        tree = magento.get_category_tree(session, base)
+        first_leaf = next(magento.iter_leaf_categories(tree), None)
+        product_url: str | None = None
+        if first_leaf is not None:
+            _, leaf = first_leaf
+            first_product_m = next(
+                magento.list_category_products(session, base, str(leaf["id"])), None
+            )
+            if first_product_m is not None:
+                canonical = first_product_m.get("canonical_url", "")
+                if canonical:
+                    product_url = (
+                        canonical
+                        if canonical.startswith("http")
+                        else f"{base}/{canonical.lstrip('/')}"
+                    )
+        attribute_selectors = (
+            magento.discover_attribute_selectors(llm_factory(), session, product_url)
+            if product_url
+            else None
+        )
+        return SiteConfig(platform="magento", selectors={"attributes": attribute_selectors})
 
     progress("Learning this website's structure…", -1.0)
     config = discover_site_config(session, llm_factory(), base, progress)
@@ -364,6 +449,36 @@ def run_web(
                         }:
                             early_stopped_event.set()
                             break
+            elif config.platform == "magento":
+                full_site_collection = True
+                wanted = (
+                    {entry.normalized for entry in filter_sheet.entries}
+                    if filter_sheet
+                    else set()
+                )
+
+                def remember_first_magento_product(product: dict) -> None:
+                    nonlocal first_product
+                    if first_product is None:
+                        first_product = product
+
+                for category_id, category_records in collect_magento_crawl(
+                    session,
+                    base,
+                    skip_keys=set(resume_progress),
+                    progress=progress,
+                    cancel=cancel,
+                    on_product=remember_first_magento_product,
+                    on_unit=set_current_unit,
+                    attribute_selectors=config.selectors.get("attributes"),
+                ):
+                    records_insite.extend(category_records)
+                    completed_keys.append(category_id)
+                    if wanted and wanted <= {
+                        normalize_key(record.part_no) for record in records_insite
+                    }:
+                        early_stopped_event.set()
+                        break
             else:
                 use_search = bool(
                     not resuming
@@ -395,7 +510,9 @@ def run_web(
             stopped_early = "Cancelled — kept the parts collected up to that point."
         except WebError as error:
             collected_count = (
-                len(records_insite) if config.platform == "insite" else len(generic_records)
+                len(records_insite)
+                if config.platform in ("insite", "magento")
+                else len(generic_records)
             ) + len(resume_parts)
             if not collected_count:
                 raise
@@ -407,7 +524,7 @@ def run_web(
 
         collection_seconds = time.monotonic() - collection_started_at
         all_collected_parts: list[PartRecord]
-        if config.platform == "insite":
+        if config.platform in ("insite", "magento"):
             seen_insite = {part.part_no: part for part in resume_parts}
             for part in records_insite:
                 seen_insite.setdefault(part.part_no, part)
@@ -420,7 +537,7 @@ def run_web(
                     all_collected_parts, None, stopped_early, progress=completed_keys
                 )
 
-            if config.probe is None and first_product is not None:
+            if config.platform == "insite" and config.probe is None and first_product is not None:
                 config.probe = {
                     "product_id": first_product["id"],
                     "part_no": first_product["productNumber"],
