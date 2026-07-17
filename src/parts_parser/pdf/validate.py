@@ -10,6 +10,10 @@ class ValidationReport:
     total_parts: int
     pages_processed: int
     pages_skipped: int
+    pages_deterministic: int
+    pages_ai_page: int
+    pages_ai_lines: int
+    pages_blank: int
     dropped_not_on_page: list[tuple[int, str]] = field(default_factory=list)
     duplicates: list[str] = field(default_factory=list)
 
@@ -59,11 +63,27 @@ def validate_parts(
         record.sequence = i
 
     pages_processed = sum(1 for r in page_results if not r.skipped)
+    pages_ai_page = sum(1 for r in page_results if r.ai_mode == "page")
+    pages_ai_lines = sum(1 for r in page_results if r.ai_mode == "lines")
+    pages_blank = sum(
+        1
+        for r in page_results
+        if r.ai_mode is None and r.skipped and not r.parts
+    )
+    pages_deterministic = sum(
+        1
+        for r in page_results
+        if r.ai_mode is None and not r.skipped
+    )
 
     report = ValidationReport(
         total_parts=len(emitted),
         pages_processed=pages_processed,
         pages_skipped=pages_skipped,
+        pages_deterministic=pages_deterministic,
+        pages_ai_page=pages_ai_page,
+        pages_ai_lines=pages_ai_lines,
+        pages_blank=pages_blank,
         dropped_not_on_page=dropped_not_on_page,
         duplicates=duplicates,
     )

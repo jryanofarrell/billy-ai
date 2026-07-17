@@ -1,6 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from parts_parser.llm import LLMClient, LLMError  # noqa: F401 — re-exported for callers
+from parts_parser.pdf.tables import SuspiciousLine
 
 
 @dataclass
@@ -17,6 +18,8 @@ class PageResult:
     parts: list[RawPart]
     skipped: bool
     skip_reason: str | None
+    ai_mode: str | None = None
+    fallback_reasons: list[str] = field(default_factory=list)
 
 
 _SYSTEM = (
@@ -41,7 +44,12 @@ def extract_page_parts(llm: LLMClient, page_text: str, page_no: int, category: s
         "If the page has no part numbers at all (cover, marketing, index), return parts: [] and a short skip_reason."
     )
 
-    raw = llm.complete_json(system=_SYSTEM, user=user_prompt, max_output_tokens=16_000)
+    raw = llm.complete_json(
+        system=_SYSTEM,
+        user=user_prompt,
+        max_output_tokens=16_000,
+        reasoning_effort="minimal",
+    )
 
     subcategory = str(raw.get("subcategory", ""))
     skip_reason_raw = raw.get("skip_reason")
@@ -70,3 +78,66 @@ def extract_page_parts(llm: LLMClient, page_text: str, page_no: int, category: s
         skipped=skipped,
         skip_reason=skip_reason,
     )
+
+
+def extract_suspicious_lines(
+    llm: LLMClient,
+    page_no: int,
+    category: str,
+    subcategory: str,
+    header_line: str,
+    lines: list[SuspiciousLine],
+) -> list[tuple[int, RawPart]]:
+    """Use one LLM call to extract parts from suspicious source lines."""
+    numbered_lines = "\n".join(
+        f'{line.line_no} (under "{line.headings}"): {line.text}' for line in lines
+    )
+    user_prompt = (
+        f"Catalog category: {category or 'unknown'}. Page {page_no}. "
+        f"Subcategory: {subcategory}. Table header: \"{header_line}\"\n\n"
+        "The following numbered lines from this page could not be parsed "
+        "deterministically. For each line, extract any parts whose part number is "
+        "explicitly printed on that line; a line may contain zero parts.\n\n"
+        f"{numbered_lines}\n\n"
+        'Return {"lines": [{"line_no": int, "parts": [{"part_no": str, '
+        '"series": str, "description": str}]}]}. Copy part numbers '
+        "character-for-character. Never invent parts."
+    )
+    raw = llm.complete_json(
+        system=_SYSTEM,
+        user=user_prompt,
+        max_output_tokens=4000,
+        reasoning_effort="minimal",
+    )
+
+    source_lines = {line.line_no: line for line in lines}
+    raw_lines = raw.get("lines", [])
+    if not isinstance(raw_lines, list):
+        raw_lines = []
+
+    parts: list[tuple[int, RawPart]] = []
+    for raw_line in raw_lines:
+        if not isinstance(raw_line, dict):
+            continue
+        line_no = raw_line.get("line_no")
+        if not isinstance(line_no, int) or line_no not in source_lines:
+            continue
+        raw_parts = raw_line.get("parts", [])
+        if not isinstance(raw_parts, list):
+            continue
+        for raw_part in raw_parts:
+            if not isinstance(raw_part, dict):
+                continue
+            series = str(raw_part.get("series", ""))
+            parts.append(
+                (
+                    line_no,
+                    RawPart(
+                        part_no=str(raw_part.get("part_no", "")),
+                        series=series or source_lines[line_no].headings,
+                        description=str(raw_part.get("description", "")),
+                    ),
+                )
+            )
+
+    return sorted(parts, key=lambda item: item[0])

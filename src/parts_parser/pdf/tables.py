@@ -9,6 +9,7 @@ FRACTION = re.compile(r"^\d+(-\d+)?/\d+$")
 _COLUMN_GAP = re.compile(r"\s{2,}|\t+")
 _SIZE = re.compile(r"^(?:\d+(?:\.\d+)?|\.\d+|\d+(?:-\d+)?/\d+)(?:[\"']|in\.?)?$", re.I)
 _QTY = re.compile(r"^\d+(?:\.\d+)?$")
+_NUMERIC_CODE = re.compile(r"\d{2,}[*†]")
 
 
 @dataclass
@@ -18,6 +19,27 @@ class RawPart:
     part_no: str
     series: str
     description: str
+
+
+@dataclass
+class SuspiciousLine:
+    """A source line that may contain a part requiring AI extraction."""
+
+    line_no: int
+    text: str
+    reason: str
+    headings: str
+
+
+@dataclass
+class PageScan:
+    """The deterministic table scan and its page-level metadata."""
+
+    parts: list[RawPart]
+    part_lines: list[int]
+    suspicious: list[SuspiciousLine]
+    header_line: str
+    word_count: int
 
 
 def is_code(value: str) -> bool:
@@ -96,23 +118,26 @@ def _looks_tabular(tokens: list[str]) -> bool:
     return len(tokens) >= 2 and any(_SIZE.fullmatch(token.rstrip(",;")) for token in tokens[-2:])
 
 
-def parse_page_tables(text: str) -> tuple[list[RawPart], list[str]]:
-    """Extract regular table rows and report reasons an AI fallback is warranted."""
+def parse_page_tables(text: str) -> PageScan:
+    """Extract regular table rows and identify lines that may require AI."""
 
     parts: list[RawPart] = []
-    reasons: list[str] = []
+    part_lines: list[int] = []
+    suspicious: list[SuspiciousLine] = []
     before_labels: list[str] = []
     after_labels: list[str] = []
     mirrored = False
     headings: list[str] = []
+    header_line = ""
 
-    for raw_line in text.splitlines():
+    for line_no, raw_line in enumerate(text.splitlines(), start=1):
         line = raw_line.strip()
         if not line:
             continue
 
         matches = list(PARTNO.finditer(line))
         if matches:
+            header_line = raw_line
             mirrored = len(matches) >= 2
             sections = PARTNO.split(line)
             before_labels = _labels(sections[0]) if sections[0].strip() else []
@@ -124,6 +149,8 @@ def parse_page_tables(text: str) -> tuple[list[RawPart], list[str]]:
             continue
 
         expected_code_position = len(before_labels)
+        suspicious_reason = ""
+        excluded_spaced_pair = False
         if (
             expected_code_position + 1 < len(tokens)
             and not is_code(tokens[expected_code_position])
@@ -131,14 +158,28 @@ def parse_page_tables(text: str) -> tuple[list[RawPart], list[str]]:
             and "-" in tokens[expected_code_position] + tokens[expected_code_position + 1]
             and is_code(tokens[expected_code_position] + tokens[expected_code_position + 1])
         ):
-            reasons.append("possible spaced part number")
+            fragments = tokens[expected_code_position : expected_code_position + 2]
+            excluded_spaced_pair = any(
+                _SIZE.fullmatch(fragment) or ".." in fragment for fragment in fragments
+            )
+            if not excluded_spaced_pair:
+                suspicious_reason = "possible spaced part number"
 
         code_positions = [index for index, token in enumerate(tokens) if is_code(token)]
+        header_seen = bool(before_labels or after_labels or mirrored)
+        if (
+            header_seen
+            and expected_code_position < len(tokens)
+            and _NUMERIC_CODE.fullmatch(tokens[expected_code_position])
+            and expected_code_position not in code_positions
+        ):
+            code_positions.append(expected_code_position)
+            code_positions.sort()
         if not mirrored:
             code_positions = [
                 position for position in code_positions if position == expected_code_position
             ]
-        if code_positions and (before_labels or after_labels or mirrored):
+        if code_positions and header_seen:
             positions = code_positions[:2] if mirrored else code_positions[:1]
             for position_index, position in enumerate(positions):
                 end = (
@@ -155,16 +196,40 @@ def parse_page_tables(text: str) -> tuple[list[RawPart], list[str]]:
                         description=_descriptions(before_labels, after_labels, before, after),
                     )
                 )
+                part_lines.append(line_no)
             continue
 
-        if _looks_tabular(tokens) and not is_code(tokens[0]):
-            reasons.append("unrecognized part-number shape in tabular row")
+        if (
+            not suspicious_reason
+            and not excluded_spaced_pair
+            and _looks_tabular(tokens)
+            and not is_code(tokens[0])
+            and len(tokens) >= 3
+            and not line.startswith(("•", "-"))
+            and not tokens[0].endswith(":")
+            and re.search(r"\bpage\b", line, re.I) is None
+            and not all(_SIZE.fullmatch(token) or _QTY.fullmatch(token) for token in tokens)
+        ):
+            suspicious_reason = "unrecognized part-number shape"
+
+        if suspicious_reason:
+            suspicious.append(
+                SuspiciousLine(
+                    line_no=line_no,
+                    text=raw_line,
+                    reason=suspicious_reason,
+                    headings=" ".join(headings),
+                )
+            )
 
         if len(tokens) <= 8 and not any(character.isdigit() for character in line):
             headings.append(line)
             headings = headings[-2:]
 
-    if len(text.split()) >= 40 and not parts:
-        reasons.append("substantial page text produced no parts")
-
-    return parts, list(dict.fromkeys(reasons))
+    return PageScan(
+        parts=parts,
+        part_lines=part_lines,
+        suspicious=suspicious,
+        header_line=header_line,
+        word_count=len(text.split()),
+    )

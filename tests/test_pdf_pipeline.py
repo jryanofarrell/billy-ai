@@ -1,4 +1,3 @@
-import logging
 import threading
 from pathlib import Path
 
@@ -23,10 +22,12 @@ class FakeLLM:
     ) -> None:
         self._queue = list(responses)
         self.call_count = 0
+        self.calls: list[dict] = []
         self.cancel_after_call = cancel_after_call
 
     def complete_json(self, *, system: str, user: str, **kwargs) -> dict:
         self.call_count += 1
+        self.calls.append({"system": system, "user": user, **kwargs})
         response = self._queue.pop(0)
         if self.cancel_after_call is not None:
             event, call_number = self.cancel_after_call
@@ -60,6 +61,33 @@ def _toc_resp() -> dict:
             }
         ]
     }
+
+
+def _line_resp(line_no: int, part_no: str) -> dict:
+    return {
+        "lines": [
+            {
+                "line_no": line_no,
+                "parts": [{"part_no": part_no, "series": "", "description": "recovered"}],
+            }
+        ]
+    }
+
+
+def _table_page(*extra_lines: str) -> str:
+    rows = [
+        "ZX-100-A 1/4 1",
+        "ZX-100-B 3/8 2",
+        "ZX-100-C 1/2 3",
+        "ZX-100-D 3/4 4",
+        "ZX-100-E 1 5",
+        "ZX-100-F 1-1/4 6",
+    ]
+    note = (
+        "Notes: Synthetic catalog dimensions are provided only for testing and "
+        "installation examples require ordinary verification before use."
+    )
+    return "\n".join(["Synthetic Fittings", "PART No. Size Qty", *rows, note, *extra_lines])
 
 
 def _prose_page(part_no: str) -> str:
@@ -108,6 +136,7 @@ def test_all_regular_pages_use_llm_only_for_toc_and_write_deterministic_cache(
         "XX-211-A",
     ]
     assert llm.call_count == 1
+    assert llm.calls[0].get("reasoning_effort") is None
     assert [part.part_no for part in result.parts] == expected_part_nos
     assert [part.sequence for part in result.parts] == list(range(1, 7))
     cache = store.get_pdf_cache(hash_file(pdf_path))
@@ -147,7 +176,7 @@ def test_fallback_page_merges_with_deterministic_parts_in_page_order_and_cache(
     assert [part["sequence"] for part in cache["parts"]] == list(range(1, 8))
 
 
-def test_fallback_reason_and_run_summary_are_logged(tmp_path, store, monkeypatch, caplog):
+def test_validation_reports_each_page_decision_path(tmp_path, store, monkeypatch):
     single_text = (_FIXTURES / "page_single_size.txt").read_text()
     prose_text = _prose_page("SPECIAL-300-A")
     pages = ["Table of Contents", single_text, prose_text]
@@ -156,16 +185,96 @@ def test_fallback_reason_and_run_summary_are_logged(tmp_path, store, monkeypatch
     pdf_path = _make_pdf(tmp_path)
     llm = FakeLLM([_toc_resp(), _parts_resp(["SPECIAL-300-A"], "Specialty")])
 
-    with caplog.at_level(logging.INFO, logger="parts_parser.pdf.pipeline"):
-        run_pdf(pdf_path, store=store, llm=llm)
+    result = run_pdf(pdf_path, store=store, llm=llm)
 
-    messages = [record.getMessage() for record in caplog.records]
-    fallback_lines = [message for message in messages if "AI fallback —" in message]
-    assert fallback_lines == [
-        "page 3/3: AI fallback — substantial page text produced no parts "
-        "(deterministic pass found 0 parts)"
+    assert llm.calls[0].get("reasoning_effort") is None
+    assert llm.calls[1]["reasoning_effort"] == "minimal"
+    assert [part.part_no for part in result.parts] == [
+        "XX-100-A",
+        "XX-101-A",
+        "SPECIAL-300-A",
     ]
-    assert "catalog.pdf: 3 pages — 1 deterministic, 1 AI fallback, 1 blank" in messages
+    assert result.validation["pages_deterministic"] == 1
+    assert result.validation["pages_ai_page"] == 1
+    assert result.validation["pages_ai_lines"] == 0
+    assert result.validation["pages_blank"] == 1
+
+
+def test_measurement_spec_line_does_not_trigger_ai(tmp_path, store, monkeypatch):
+    page = _table_page("Width: 14.5 In.")
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: [page])
+    llm = FakeLLM([])
+
+    result = run_pdf(_make_pdf(tmp_path), store=store, llm=llm)
+
+    assert llm.call_count == 0
+    assert [part.part_no for part in result.parts] == [
+        "ZX-100-A", "ZX-100-B", "ZX-100-C", "ZX-100-D", "ZX-100-E", "ZX-100-F"
+    ]
+    assert result.validation["pages_deterministic"] == 1
+    assert result.validation["pages_ai_page"] == 0
+    assert result.validation["pages_ai_lines"] == 0
+    assert result.validation["pages_blank"] == 0
+
+
+def test_suspicious_rows_use_one_numbered_line_call_and_merge_in_source_order(
+    tmp_path, store, monkeypatch
+):
+    page = "\n".join(
+        [
+            "Synthetic Fittings",
+            "PART No. Size Qty",
+            "ZX-100-A 1/4 1",
+            "ODD@CODE 3/8 2",
+            "ZX-100-B 1/2 3",
+            "ZX-100-C 3/4 4",
+            "ZX-100-D 1 5",
+            "ZX-100-E 1-1/4 6",
+            "Notes: Synthetic dimensions and quantities are included only for "
+            "testing this catalog workflow and require verification before use.",
+        ]
+    )
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: [page])
+    llm = FakeLLM([_line_resp(4, "ODD@CODE")])
+
+    result = run_pdf(_make_pdf(tmp_path), store=store, llm=llm)
+
+    assert llm.call_count == 1
+    assert '4 (under "Synthetic Fittings"): ODD@CODE 3/8 2' in llm.calls[0]["user"]
+    assert llm.calls[0]["reasoning_effort"] == "minimal"
+    assert [part.part_no for part in result.parts] == [
+        "ZX-100-A", "ODD@CODE", "ZX-100-B", "ZX-100-C", "ZX-100-D", "ZX-100-E"
+    ]
+    assert result.validation["pages_ai_lines"] == 1
+
+
+def test_many_suspicious_rows_use_whole_page_ai(tmp_path, store, monkeypatch):
+    page = _table_page(
+        "ODD@A 1/4 1", "ODD@B 3/8 2", "ODD@C 1/2 3", "ODD@D 3/4 4", "ODD@E 1 5"
+    )
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: [page])
+    llm = FakeLLM([_parts_resp(["ZX-100-A", "ODD@A", "ZX-100-F"])])
+
+    result = run_pdf(_make_pdf(tmp_path), store=store, llm=llm)
+
+    assert llm.call_count == 1
+    assert llm.calls[0]["reasoning_effort"] == "minimal"
+    assert [part.part_no for part in result.parts] == ["ZX-100-A", "ODD@A", "ZX-100-F"]
+    assert result.validation["pages_ai_page"] == 1
+    assert result.validation["pages_ai_lines"] == 0
+
+
+def test_substantial_zero_part_page_uses_whole_page_ai(tmp_path, store, monkeypatch):
+    page = _prose_page("SPECIAL-XyZ-7")
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: [page])
+    llm = FakeLLM([_parts_resp(["SPECIAL-XyZ-7"])])
+
+    result = run_pdf(_make_pdf(tmp_path), store=store, llm=llm)
+
+    assert llm.call_count == 1
+    assert llm.calls[0]["reasoning_effort"] == "minimal"
+    assert [part.part_no for part in result.parts] == ["SPECIAL-XyZ-7"]
+    assert result.validation["pages_ai_page"] == 1
 
 
 def test_second_run_hits_cache_makes_zero_llm_calls_returns_same_parts(
