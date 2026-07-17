@@ -10,6 +10,10 @@ _COLUMN_GAP = re.compile(r"\s{2,}|\t+")
 _SIZE = re.compile(r"^(?:\d+(?:\.\d+)?|\.\d+|\d+(?:-\d+)?/\d+)(?:[\"']|in\.?)?$", re.I)
 _QTY = re.compile(r"^\d+(?:\.\d+)?$")
 _NUMERIC_CODE = re.compile(r"\d{2,}[*†]")
+# A sub-heading that modifies the block above it rather than naming a new product.
+_VARIANT = re.compile(r"^(reducing|lead free|forged nuts?)$", re.I)
+# A prose line ending like a sentence: lowercase word, then a period at the end.
+_SENTENCE = re.compile(r"[a-z].*[a-z]\.\s*$")
 
 
 @dataclass
@@ -118,6 +122,56 @@ def _looks_tabular(tokens: list[str]) -> bool:
     return len(tokens) >= 2 and any(_SIZE.fullmatch(token.rstrip(",;")) for token in tokens[-2:])
 
 
+def _is_note(line: str, tokens: list[str]) -> bool:
+    """Prose (a real sentence or an editorial note), not a product heading."""
+    lowered = line.lower()
+    if lowered.startswith(("note", "for ", "see ", "marked ")) or "refers to" in lowered:
+        return True
+    return bool(_SENTENCE.search(line)) and len(tokens) >= 4
+
+
+def _is_heading(line: str, tokens: list[str]) -> bool:
+    """A short block/sub-heading line. Digits are allowed (e.g. ``90° ELBOW``,
+    ``S.A.E. 45°``); part rows, size rows, page numbers, and prose are not."""
+    if not tokens or len(tokens) > 6:
+        return False
+    if line.strip().isdigit():
+        return False
+    if any(is_code(token) for token in tokens):
+        return False
+    if all(_SIZE.fullmatch(token) or _QTY.fullmatch(token) for token in tokens):
+        return False
+    return not _is_note(line, tokens)
+
+
+def _clean_heading(tokens: list[str]) -> str:
+    """Drop leading size/qty tokens — column-index noise (e.g. the ``1 2`` of a
+    ``1 2 3`` size header) that pdfplumber merges onto a heading sharing its row."""
+    start = 0
+    while start < len(tokens) and (_QTY.fullmatch(tokens[start]) or _SIZE.fullmatch(tokens[start])):
+        start += 1
+    return " ".join(tokens[start:])
+
+
+def _series_for_row(pending: list[str], primary: str, current: str) -> tuple[str, str, str]:
+    """Resolve a row's series from the heading run collected just above it.
+
+    Returns ``(series, primary, current)``. A run of only variant sub-headings
+    (Reducing, Lead Free, …) merges onto the last full block heading; any other
+    run becomes the new block heading; an empty run carries the current series
+    forward (continuation tables).
+    """
+    if not pending:
+        return current, primary, current
+    run = " ".join(pending)
+    if primary and all(_VARIANT.fullmatch(line.strip()) for line in pending):
+        series = f"{primary} / {run}"
+    else:
+        series = run
+        primary = run
+    return series, primary, series
+
+
 def parse_page_tables(text: str) -> PageScan:
     """Extract regular table rows and identify lines that may require AI."""
 
@@ -127,7 +181,9 @@ def parse_page_tables(text: str) -> PageScan:
     before_labels: list[str] = []
     after_labels: list[str] = []
     mirrored = False
-    headings: list[str] = []
+    pending: list[str] = []  # contiguous heading lines not yet applied to a row
+    primary = ""  # last full (non-variant) block heading
+    current_series = ""  # series applied to rows until the next heading run
     header_line = ""
 
     for line_no, raw_line in enumerate(text.splitlines(), start=1):
@@ -180,6 +236,8 @@ def parse_page_tables(text: str) -> PageScan:
                 position for position in code_positions if position == expected_code_position
             ]
         if code_positions and header_seen:
+            series, primary, current_series = _series_for_row(pending, primary, current_series)
+            pending = []
             positions = code_positions[:2] if mirrored else code_positions[:1]
             for position_index, position in enumerate(positions):
                 end = (
@@ -192,7 +250,7 @@ def parse_page_tables(text: str) -> PageScan:
                 parts.append(
                     RawPart(
                         part_no=tokens[position],
-                        series=" ".join(headings),
+                        series=series,
                         description=_descriptions(before_labels, after_labels, before, after),
                     )
                 )
@@ -218,13 +276,15 @@ def parse_page_tables(text: str) -> PageScan:
                     line_no=line_no,
                     text=raw_line,
                     reason=suspicious_reason,
-                    headings=" ".join(headings),
+                    headings=" ".join(pending) or current_series,
                 )
             )
 
-        if len(tokens) <= 8 and not any(character.isdigit() for character in line):
-            headings.append(line)
-            headings = headings[-2:]
+        if _is_heading(line, tokens):
+            pending.append(_clean_heading(tokens))
+        # Non-heading lines (notes, cross-references, page numbers) are skipped, not
+        # cleared: only a part row consumes the pending run, so a heading survives an
+        # intervening note or cross-reference down to the table it labels.
 
     return PageScan(
         parts=parts,

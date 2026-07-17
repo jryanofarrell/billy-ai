@@ -65,16 +65,8 @@ def validate_parts(
     pages_processed = sum(1 for r in page_results if not r.skipped)
     pages_ai_page = sum(1 for r in page_results if r.ai_mode == "page")
     pages_ai_lines = sum(1 for r in page_results if r.ai_mode == "lines")
-    pages_blank = sum(
-        1
-        for r in page_results
-        if r.ai_mode is None and r.skipped and not r.parts
-    )
-    pages_deterministic = sum(
-        1
-        for r in page_results
-        if r.ai_mode is None and not r.skipped
-    )
+    pages_blank = sum(1 for r in page_results if r.ai_mode is None and r.skipped and not r.parts)
+    pages_deterministic = sum(1 for r in page_results if r.ai_mode is None and not r.skipped)
 
     report = ValidationReport(
         total_parts=len(emitted),

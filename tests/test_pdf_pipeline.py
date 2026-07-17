@@ -5,9 +5,14 @@ import pytest
 
 from parts_parser.llm import LLMError
 from parts_parser.output.filtering import FilterEntry, FilterSheet, MatchReport
-from parts_parser.pdf.extract import PdfError
+from parts_parser.pdf.extract import PageText, PdfError
 from parts_parser.pdf.pipeline import run_pdf
 from parts_parser.store import RunStore, hash_file
+
+
+def _wrap(bodies: list[str]) -> list[PageText]:
+    """Wrap page-body strings as PageText objects for the extract_pages mock."""
+    return [PageText(heading="", body=body) for body in bodies]
 
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "pdf"
@@ -120,7 +125,7 @@ def test_all_regular_pages_use_llm_only_for_toc_and_write_deterministic_cache(
     single_text = (_FIXTURES / "page_single_size.txt").read_text()
     two_text = (_FIXTURES / "page_two_size.txt").read_text()
     pages = ["Table of Contents", single_text, two_text]
-    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: pages)
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_pages", lambda _path: _wrap(pages))
 
     pdf_path = _make_pdf(tmp_path)
     llm = FakeLLM([_toc_resp()])
@@ -151,7 +156,7 @@ def test_fallback_page_merges_with_deterministic_parts_in_page_order_and_cache(
     two_text = (_FIXTURES / "page_two_size.txt").read_text()
     prose_text = _prose_page("SPECIAL-300-A")
     pages = ["Table of Contents", single_text, prose_text, two_text]
-    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: pages)
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_pages", lambda _path: _wrap(pages))
 
     pdf_path = _make_pdf(tmp_path)
     llm = FakeLLM([_toc_resp(), _parts_resp(["SPECIAL-300-A"], "Specialty")])
@@ -180,7 +185,7 @@ def test_validation_reports_each_page_decision_path(tmp_path, store, monkeypatch
     single_text = (_FIXTURES / "page_single_size.txt").read_text()
     prose_text = _prose_page("SPECIAL-300-A")
     pages = ["Table of Contents", single_text, prose_text]
-    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: pages)
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_pages", lambda _path: _wrap(pages))
 
     pdf_path = _make_pdf(tmp_path)
     llm = FakeLLM([_toc_resp(), _parts_resp(["SPECIAL-300-A"], "Specialty")])
@@ -202,14 +207,19 @@ def test_validation_reports_each_page_decision_path(tmp_path, store, monkeypatch
 
 def test_measurement_spec_line_does_not_trigger_ai(tmp_path, store, monkeypatch):
     page = _table_page("Width: 14.5 In.")
-    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: [page])
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_pages", lambda _path: _wrap([page]))
     llm = FakeLLM([])
 
     result = run_pdf(_make_pdf(tmp_path), store=store, llm=llm)
 
     assert llm.call_count == 0
     assert [part.part_no for part in result.parts] == [
-        "ZX-100-A", "ZX-100-B", "ZX-100-C", "ZX-100-D", "ZX-100-E", "ZX-100-F"
+        "ZX-100-A",
+        "ZX-100-B",
+        "ZX-100-C",
+        "ZX-100-D",
+        "ZX-100-E",
+        "ZX-100-F",
     ]
     assert result.validation["pages_deterministic"] == 1
     assert result.validation["pages_ai_page"] == 0
@@ -234,7 +244,7 @@ def test_suspicious_rows_use_one_numbered_line_call_and_merge_in_source_order(
             "testing this catalog workflow and require verification before use.",
         ]
     )
-    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: [page])
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_pages", lambda _path: _wrap([page]))
     llm = FakeLLM([_line_resp(4, "ODD@CODE")])
 
     result = run_pdf(_make_pdf(tmp_path), store=store, llm=llm)
@@ -243,16 +253,19 @@ def test_suspicious_rows_use_one_numbered_line_call_and_merge_in_source_order(
     assert '4 (under "Synthetic Fittings"): ODD@CODE 3/8 2' in llm.calls[0]["user"]
     assert llm.calls[0]["reasoning_effort"] == "minimal"
     assert [part.part_no for part in result.parts] == [
-        "ZX-100-A", "ODD@CODE", "ZX-100-B", "ZX-100-C", "ZX-100-D", "ZX-100-E"
+        "ZX-100-A",
+        "ODD@CODE",
+        "ZX-100-B",
+        "ZX-100-C",
+        "ZX-100-D",
+        "ZX-100-E",
     ]
     assert result.validation["pages_ai_lines"] == 1
 
 
 def test_many_suspicious_rows_use_whole_page_ai(tmp_path, store, monkeypatch):
-    page = _table_page(
-        "ODD@A 1/4 1", "ODD@B 3/8 2", "ODD@C 1/2 3", "ODD@D 3/4 4", "ODD@E 1 5"
-    )
-    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: [page])
+    page = _table_page("ODD@A 1/4 1", "ODD@B 3/8 2", "ODD@C 1/2 3", "ODD@D 3/4 4", "ODD@E 1 5")
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_pages", lambda _path: _wrap([page]))
     llm = FakeLLM([_parts_resp(["ZX-100-A", "ODD@A", "ZX-100-F"])])
 
     result = run_pdf(_make_pdf(tmp_path), store=store, llm=llm)
@@ -266,7 +279,7 @@ def test_many_suspicious_rows_use_whole_page_ai(tmp_path, store, monkeypatch):
 
 def test_substantial_zero_part_page_uses_whole_page_ai(tmp_path, store, monkeypatch):
     page = _prose_page("SPECIAL-XyZ-7")
-    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: [page])
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_pages", lambda _path: _wrap([page]))
     llm = FakeLLM([_parts_resp(["SPECIAL-XyZ-7"])])
 
     result = run_pdf(_make_pdf(tmp_path), store=store, llm=llm)
@@ -283,7 +296,7 @@ def test_second_run_hits_cache_makes_zero_llm_calls_returns_same_parts(
     single_text = (_FIXTURES / "page_single_size.txt").read_text()
     two_text = (_FIXTURES / "page_two_size.txt").read_text()
     pages = [single_text, two_text]
-    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: pages)
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_pages", lambda _path: _wrap(pages))
 
     pdf_path = _make_pdf(tmp_path)
     first_llm = FakeLLM([])
@@ -303,7 +316,7 @@ def test_partial_llm_failure_is_cached_incomplete_and_reparsed_on_next_run(
     first_page = _prose_page("XX-100-A")
     second_page = _prose_page("XX-101-A")
     monkeypatch.setattr(
-        "parts_parser.pdf.pipeline.extract_text", lambda _path: [first_page, second_page]
+        "parts_parser.pdf.pipeline.extract_pages", lambda _path: _wrap([first_page, second_page])
     )
     pdf_path = _make_pdf(tmp_path)
 
@@ -327,7 +340,7 @@ def test_partial_llm_failure_is_cached_incomplete_and_reparsed_on_next_run(
 
 def test_clean_cache_is_served_without_llm_calls(tmp_path, store, monkeypatch):
     page = _prose_page("XX-100-A")
-    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: [page])
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_pages", lambda _path: _wrap([page]))
     pdf_path = _make_pdf(tmp_path)
 
     run_pdf(pdf_path, store=store, llm=FakeLLM([_parts_resp(["XX-100-A"])]))
@@ -340,7 +353,9 @@ def test_clean_cache_is_served_without_llm_calls(tmp_path, store, monkeypatch):
 
 
 def test_scanned_pdf_raises_pdf_error_mentioning_scanned(tmp_path, store, monkeypatch):
-    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: ["", "tiny"])
+    monkeypatch.setattr(
+        "parts_parser.pdf.pipeline.extract_pages", lambda _path: _wrap(["", "tiny"])
+    )
 
     pdf_path = _make_pdf(tmp_path)
     with pytest.raises(PdfError, match="scanned"):
@@ -349,7 +364,9 @@ def test_scanned_pdf_raises_pdf_error_mentioning_scanned(tmp_path, store, monkey
 
 def test_filter_sheet_returns_match_report_and_filters_parts(tmp_path, store, monkeypatch):
     single_text = (_FIXTURES / "page_single_size.txt").read_text()
-    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: [single_text])
+    monkeypatch.setattr(
+        "parts_parser.pdf.pipeline.extract_pages", lambda _path: _wrap([single_text])
+    )
 
     pdf_path = _make_pdf(tmp_path)
     llm = FakeLLM([_parts_resp(["XX-100-A", "XX-101-A"])])
@@ -372,7 +389,7 @@ def test_blank_page_skips_llm_call(tmp_path, store, monkeypatch):
     blank_page = " " * 300
     single_text = (_FIXTURES / "page_single_size.txt").read_text()
     pages = [blank_page, single_text]
-    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: pages)
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_pages", lambda _path: _wrap(pages))
 
     pdf_path = _make_pdf(tmp_path)
     llm = FakeLLM([])
@@ -385,7 +402,7 @@ def test_blank_page_skips_llm_call(tmp_path, store, monkeypatch):
 
 def test_cancel_mid_loop_returns_partial_and_writes_incomplete_cache(tmp_path, store, monkeypatch):
     pages = [_prose_page("XX-100-A"), _prose_page("XX-101-A")]
-    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: pages)
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_pages", lambda _path: _wrap(pages))
 
     pdf_path = _make_pdf(tmp_path)
     cancel = threading.Event()
@@ -404,7 +421,7 @@ def test_cancel_mid_loop_returns_partial_and_writes_incomplete_cache(tmp_path, s
 
 def test_llm_failure_on_first_content_page_raises(tmp_path, store, monkeypatch):
     page = _prose_page("XX-100-A")
-    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: [page])
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_pages", lambda _path: _wrap([page]))
     pdf_path = _make_pdf(tmp_path)
 
     with pytest.raises(LLMError, match="AI service unavailable"):

@@ -94,7 +94,7 @@ def extract_suspicious_lines(
     )
     user_prompt = (
         f"Catalog category: {category or 'unknown'}. Page {page_no}. "
-        f"Subcategory: {subcategory}. Table header: \"{header_line}\"\n\n"
+        f'Subcategory: {subcategory}. Table header: "{header_line}"\n\n'
         "The following numbered lines from this page could not be parsed "
         "deterministically. For each line, extract any parts whose part number is "
         "explicitly printed on that line; a line may contain zero parts.\n\n"

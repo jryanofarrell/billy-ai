@@ -168,3 +168,73 @@ NP-300-B 1/2 2
     assert [part.part_no for part in scan.parts] == ["NP-300-C", "NP-300-A", "NP-300-B"]
     assert scan.part_lines == [3, 4, 5]
     assert len(scan.part_lines) == len(scan.parts)
+
+
+def test_series_uses_full_contiguous_heading_run_above_header():
+    text = """TUBE
+COUPLING
+Swivel Flare
+(FORGED NUTS)
+PART No.  Tube
+34-4  1/4
+34-5  5/16
+"""
+    scan = parse_page_tables(text)
+    assert [p.series for p in scan.parts] == [
+        "TUBE COUPLING Swivel Flare (FORGED NUTS)",
+        "TUBE COUPLING Swivel Flare (FORGED NUTS)",
+    ]
+
+
+def test_heading_may_contain_digits_like_angle_degrees():
+    text = """90° ELBOW
+PART No.  Pipe
+BI-116-A  1/8
+"""
+    scan = parse_page_tables(text)
+    assert scan.parts[0].series == "90° ELBOW"
+
+
+def test_variant_subheading_merges_onto_parent_block():
+    text = """FORGED NUT
+Short Standard Type
+PART No.  Tube
+40-8  1/2
+Reducing
+PART No.  Tube
+40R-64  3/8 to 1/4
+"""
+    scan = parse_page_tables(text)
+    assert scan.parts[0].series == "FORGED NUT Short Standard Type"
+    assert scan.parts[1].series == "FORGED NUT Short Standard Type / Reducing"
+
+
+def test_code_bearing_cross_reference_does_not_erase_pending_heading():
+    text = """BUSHING
+Steel merchant see BI-110MC
+PART No.  Pipe
+BI-110-BA  1/4
+"""
+    scan = parse_page_tables(text)
+    assert scan.parts[0].series == "BUSHING"
+
+
+def test_prose_note_is_excluded_from_series():
+    text = """PLUG
+Note: supplied in steel with a zinc coating for corrosion resistance.
+PART No.  Pipe
+BI-109-A  1/8
+"""
+    scan = parse_page_tables(text)
+    assert scan.parts[0].series == "PLUG"
+
+
+def test_empty_heading_run_carries_the_previous_series_forward():
+    text = """ELBOW
+PART No.  Pipe
+BI-100-A  1/8
+PART No.  Pipe
+BI-100-B  1/4
+"""
+    scan = parse_page_tables(text)
+    assert [p.series for p in scan.parts] == ["ELBOW", "ELBOW"]
