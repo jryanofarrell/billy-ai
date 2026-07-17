@@ -1,3 +1,4 @@
+import logging
 import threading
 from pathlib import Path
 
@@ -144,6 +145,27 @@ def test_fallback_page_merges_with_deterministic_parts_in_page_order_and_cache(
     assert cache["complete"] is True
     assert [part["part_no"] for part in cache["parts"]] == expected_part_nos
     assert [part["sequence"] for part in cache["parts"]] == list(range(1, 8))
+
+
+def test_fallback_reason_and_run_summary_are_logged(tmp_path, store, monkeypatch, caplog):
+    single_text = (_FIXTURES / "page_single_size.txt").read_text()
+    prose_text = _prose_page("SPECIAL-300-A")
+    pages = ["Table of Contents", single_text, prose_text]
+    monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: pages)
+
+    pdf_path = _make_pdf(tmp_path)
+    llm = FakeLLM([_toc_resp(), _parts_resp(["SPECIAL-300-A"], "Specialty")])
+
+    with caplog.at_level(logging.INFO, logger="parts_parser.pdf.pipeline"):
+        run_pdf(pdf_path, store=store, llm=llm)
+
+    messages = [record.getMessage() for record in caplog.records]
+    fallback_lines = [message for message in messages if "AI fallback —" in message]
+    assert fallback_lines == [
+        "page 3/3: AI fallback — substantial page text produced no parts "
+        "(deterministic pass found 0 parts)"
+    ]
+    assert "catalog.pdf: 3 pages — 1 deterministic, 1 AI fallback, 1 blank" in messages
 
 
 def test_second_run_hits_cache_makes_zero_llm_calls_returns_same_parts(

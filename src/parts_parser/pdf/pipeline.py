@@ -1,4 +1,5 @@
 import dataclasses
+import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -13,6 +14,8 @@ from parts_parser.pdf.tables import parse_page_tables
 from parts_parser.pdf.toc import find_toc_pages, parse_toc, section_for_page
 from parts_parser.pdf.validate import validate_parts
 from parts_parser.store import RunStore, hash_file
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -62,6 +65,7 @@ def run_pdf(
             sections = []
 
         page_results: list[PageResult] = []
+        page_counts = {"deterministic": 0, "ai": 0, "blank": 0}
         current_page = 1
         try:
             for i, text in enumerate(pages):
@@ -70,6 +74,8 @@ def run_pdf(
                     raise _Cancelled
                 progress(f"Reading page {current_page} of {len(pages)}…", i / len(pages))
                 if len("".join(text.split())) < 40:
+                    page_counts["blank"] += 1
+                    logger.debug("page %d/%d: skipped (blank)", current_page, len(pages))
                     page_results.append(
                         PageResult(
                             page_no=current_page,
@@ -84,6 +90,14 @@ def run_pdf(
                 category = section.category if section is not None else ""
                 det_parts, reasons = parse_page_tables(text)
                 if reasons:
+                    page_counts["ai"] += 1
+                    logger.info(
+                        "page %d/%d: AI fallback — %s (deterministic pass found %d parts)",
+                        current_page,
+                        len(pages),
+                        "; ".join(reasons),
+                        len(det_parts),
+                    )
                     progress(
                         f"Reading page {current_page} of {len(pages)} (AI)…",
                         i / len(pages),
@@ -91,6 +105,13 @@ def run_pdf(
                     llm = llm or get_client()
                     page_result = extract_page_parts(llm, text, current_page, category)
                 else:
+                    page_counts["deterministic"] += 1
+                    logger.debug(
+                        "page %d/%d: deterministic, %d parts",
+                        current_page,
+                        len(pages),
+                        len(det_parts),
+                    )
                     page_title = next(
                         (line.strip() for line in text.splitlines() if line.strip()),
                         "",
@@ -110,6 +131,14 @@ def run_pdf(
                 raise
             stopped_early = f"Stopped on page {current_page} of {len(pages)} ({error})."
 
+        logger.info(
+            "%s: %d pages — %d deterministic, %d AI fallback, %d blank",
+            path.name,
+            len(pages),
+            page_counts["deterministic"],
+            page_counts["ai"],
+            page_counts["blank"],
+        )
         parts, report = validate_parts(page_results, pages, sections)
         validation = dataclasses.asdict(report)
         store.save_pdf_cache(

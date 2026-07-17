@@ -50,6 +50,13 @@ fallback triggers:
 - a table-like row has an unrecognized part-number shape;
 - a page with at least 40 whitespace-delimited tokens produces no parts.
 
+`pdf/pipeline.py` logs every fallback decision to the `parts_parser` logger:
+one INFO line per AI-fallback page with its trigger reasons and the
+deterministic part count, DEBUG lines for deterministic and blank pages, and an
+end-of-run INFO summary of page counts. `logging_setup.setup_logging()`, called
+from `__main__`, writes the package logger to a rotating file at
+`<app-data>/logs/parts_parser.log`.
+
 ## Insite endpoint facts
 
 - `GET /api/v1/websites/current?expand=languages%2Ccurrencies` detects an
