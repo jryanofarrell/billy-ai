@@ -198,9 +198,7 @@ def test_partial_llm_failure_is_cached_incomplete_and_reparsed_on_next_run(
     )
     pdf_path = _make_pdf(tmp_path)
 
-    failed_llm = FakeLLM(
-        [_parts_resp(["XX-100-A"]), LLMError("AI service unavailable")]
-    )
+    failed_llm = FakeLLM([_parts_resp(["XX-100-A"]), LLMError("AI service unavailable")])
     partial = run_pdf(pdf_path, store=store, llm=failed_llm)
 
     assert [part.part_no for part in partial.parts] == ["XX-100-A"]
@@ -276,9 +274,7 @@ def test_blank_page_skips_llm_call(tmp_path, store, monkeypatch):
     assert len(result.parts) == 2
 
 
-def test_cancel_mid_loop_returns_partial_and_writes_incomplete_cache(
-    tmp_path, store, monkeypatch
-):
+def test_cancel_mid_loop_returns_partial_and_writes_incomplete_cache(tmp_path, store, monkeypatch):
     pages = [_prose_page("XX-100-A"), _prose_page("XX-101-A")]
     monkeypatch.setattr("parts_parser.pdf.pipeline.extract_text", lambda _path: pages)
 

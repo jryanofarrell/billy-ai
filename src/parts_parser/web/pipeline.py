@@ -133,8 +133,7 @@ def resolve_site_config(
         validation = validate_site_config(session, config, base)
         if validation.problems:
             raise WebError(
-                "Couldn't reliably read this website. Details: "
-                + "; ".join(validation.problems)
+                "Couldn't reliably read this website. Details: " + "; ".join(validation.problems)
             )
 
     if confirm is not None and not confirm(validation.sample_parts):
@@ -283,7 +282,10 @@ def run_web(
         session.establish(base)
 
         config = resolve_site_config(
-            session, store, domain, base,
+            session,
+            store,
+            domain,
+            base,
             llm_factory=llm_factory,
             confirm=confirm,
             progress=progress,
@@ -324,7 +326,9 @@ def run_web(
                             if normalize_key(product["productNumber"]) == entry.normalized:
                                 seg = product["urlSegment"]
                                 if seg not in breadcrumb_cache:
-                                    breadcrumb_cache[seg] = insite.get_breadcrumb(session, base, seg)
+                                    breadcrumb_cache[seg] = insite.get_breadcrumb(
+                                        session, base, seg
+                                    )
                                 if product["productNumber"] not in seen:
                                     seen[product["productNumber"]] = insite.product_to_record(
                                         product, breadcrumb_cache[seg]
@@ -370,7 +374,9 @@ def run_web(
                 full_site_collection = not use_search
                 try:
                     run_generic(
-                        session, config, base,
+                        session,
+                        config,
+                        base,
                         filter_sheet=filter_sheet,
                         progress=progress,
                         cancel=cancel,
@@ -389,9 +395,7 @@ def run_web(
             stopped_early = "Cancelled — kept the parts collected up to that point."
         except WebError as error:
             collected_count = (
-                len(records_insite)
-                if config.platform == "insite"
-                else len(generic_records)
+                len(records_insite) if config.platform == "insite" else len(generic_records)
             ) + len(resume_parts)
             if not collected_count:
                 raise
@@ -410,9 +414,7 @@ def run_web(
             all_collected_parts = list(seen_insite.values())
             if filter_sheet:
                 matched, report = match_parts(filter_sheet, all_collected_parts)
-                result = WebRunResult(
-                    matched, report, stopped_early, progress=completed_keys
-                )
+                result = WebRunResult(matched, report, stopped_early, progress=completed_keys)
             else:
                 result = WebRunResult(
                     all_collected_parts, None, stopped_early, progress=completed_keys
@@ -445,9 +447,7 @@ def run_web(
                 seen_parts.setdefault(part.part_no, part)
             all_collected_parts = list(seen_parts.values())
             if filter_sheet:
-                matched_generic, report_generic = match_parts(
-                    filter_sheet, all_collected_parts
-                )
+                matched_generic, report_generic = match_parts(filter_sheet, all_collected_parts)
                 result = WebRunResult(
                     matched_generic,
                     report_generic,
@@ -464,11 +464,7 @@ def run_web(
 
         cache_complete = stopped_early is None and not early_stopped_event.is_set()
         if full_site_collection:
-            if (
-                outgoing_cache is not None
-                and outgoing_cache.get("complete")
-                and cache_complete
-            ):
+            if outgoing_cache is not None and outgoing_cache.get("complete") and cache_complete:
                 old_parts = outgoing_cache["parts"]
                 old_count = len(old_parts)
                 new_count = len(all_collected_parts)
@@ -477,9 +473,7 @@ def run_web(
                         f"This site returned {new_count} parts where the saved copy had "
                         f"{old_count} — its layout may have changed."
                     )
-                old_with_attributes = sum(
-                    bool(part.get("attributes")) for part in old_parts
-                )
+                old_with_attributes = sum(bool(part.get("attributes")) for part in old_parts)
                 if (
                     old_parts
                     and old_with_attributes > len(old_parts) * 0.5

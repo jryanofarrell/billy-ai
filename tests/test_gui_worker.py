@@ -41,9 +41,7 @@ def test_output_path_for_uses_next_available_collision_number(tmp_path, monkeypa
     assert third_path == downloads / "example.com-parts (3).xlsx"
 
 
-def test_worker_clean_success_emits_path_part_count_and_empty_warning(
-    tmp_path, monkeypatch
-):
+def test_worker_clean_success_emits_path_part_count_and_empty_warning(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     pdf_path = tmp_path / "catalog.pdf"
     parts = [object(), object()]
@@ -58,9 +56,7 @@ def test_worker_clean_success_emits_path_part_count_and_empty_warning(
     )
     worker = PipelineWorker(url=None, pdf_path=str(pdf_path), filter_path=None)
     succeeded = []
-    worker.succeeded.connect(
-        lambda path, count, warning: succeeded.append((path, count, warning))
-    )
+    worker.succeeded.connect(lambda path, count, warning: succeeded.append((path, count, warning)))
 
     worker.run()
 
@@ -87,9 +83,7 @@ def test_worker_partial_success_writes_workbook_and_emits_warning(tmp_path, monk
     worker = PipelineWorker(url=None, pdf_path=str(pdf_path), filter_path=None)
     succeeded = []
     worker.succeeded.connect(
-        lambda path, count, emitted_warning: succeeded.append(
-            (path, count, emitted_warning)
-        )
+        lambda path, count, emitted_warning: succeeded.append((path, count, emitted_warning))
     )
 
     worker.run()
@@ -112,13 +106,9 @@ def test_worker_joins_stopped_early_warning_and_result_notices(tmp_path, monkeyp
     monkeypatch.setattr(worker_module, "RunStore", object)
     monkeypatch.setattr(worker_module, "run_pdf", lambda *args, **kwargs: result)
     monkeypatch.setattr(worker_module, "write_workbook", lambda *args, **kwargs: None)
-    worker = PipelineWorker(
-        url=None, pdf_path=str(tmp_path / "catalog.pdf"), filter_path=None
-    )
+    worker = PipelineWorker(url=None, pdf_path=str(tmp_path / "catalog.pdf"), filter_path=None)
     succeeded = []
-    worker.succeeded.connect(
-        lambda path, count, warning: succeeded.append((path, count, warning))
-    )
+    worker.succeeded.connect(lambda path, count, warning: succeeded.append((path, count, warning)))
 
     worker.run()
 
@@ -136,16 +126,12 @@ def test_worker_partial_result_without_parts_emits_failure(tmp_path, monkeypatch
         "write_workbook",
         lambda *args, **kwargs: writes.append(args),
     )
-    worker = PipelineWorker(
-        url=None, pdf_path=str(tmp_path / "catalog.pdf"), filter_path=None
-    )
+    worker = PipelineWorker(url=None, pdf_path=str(tmp_path / "catalog.pdf"), filter_path=None)
     failed = []
     succeeded = []
     worker.failed.connect(failed.append)
     worker.succeeded.connect(
-        lambda path, count, emitted_warning: succeeded.append(
-            (path, count, emitted_warning)
-        )
+        lambda path, count, emitted_warning: succeeded.append((path, count, emitted_warning))
     )
 
     worker.run()
@@ -238,9 +224,7 @@ def test_choose_cached_blocks_until_cache_answer_and_returns_it(answer):
         Qt.ConnectionType.DirectConnection,
     )
     returned = []
-    thread = threading.Thread(
-        target=lambda: returned.append(worker._choose_cached(info))
-    )
+    thread = threading.Thread(target=lambda: returned.append(worker._choose_cached(info)))
 
     thread.start()
     assert decision_ready.wait(timeout=1)

@@ -83,9 +83,7 @@ class PipelineWorker(QThread):
         self._cache_decision_event.clear()
         self.cacheDecision.emit(info)
         self._cache_decision_event.wait()
-        self._resuming_partial_cache = self._use_saved_cache and not getattr(
-            info, "complete", True
-        )
+        self._resuming_partial_cache = self._use_saved_cache and not getattr(info, "complete", True)
         return self._use_saved_cache
 
     def run(self) -> None:
@@ -103,14 +101,10 @@ class PipelineWorker(QThread):
                     self.progressed.emit(message, percent)
 
                 if self._url is not None:
-                    result, output_path = self._run_web_job(
-                        store, filter_sheet, report_progress
-                    )
+                    result, output_path = self._run_web_job(store, filter_sheet, report_progress)
                     mode = "web"
                 elif self._pdf_path is not None:
-                    result, output_path = self._run_pdf_job(
-                        store, filter_sheet, report_progress
-                    )
+                    result, output_path = self._run_pdf_job(store, filter_sheet, report_progress)
                     mode = "pdf"
                 else:
                     raise OutputError("Choose a website or PDF catalog to parse.")
@@ -128,9 +122,7 @@ class PipelineWorker(QThread):
                 )
                 warnings = [result.stopped_early] if result.stopped_early else []
                 warnings.extend(getattr(result, "notices", []))
-                self.succeeded.emit(
-                    str(output_path), len(result.parts), "\n".join(warnings)
-                )
+                self.succeeded.emit(str(output_path), len(result.parts), "\n".join(warnings))
             except (WebError, PdfError, LLMError, OutputError) as error:
                 self.failed.emit(str(error))
             except Exception as error:
@@ -153,14 +145,11 @@ class PipelineWorker(QThread):
             domain = urlparse(self._url).netloc.lower()
             updated_cache = store.get_web_cache(domain)
             updated_count = (
-                len(updated_cache["parts"])
-                if updated_cache is not None
-                else len(result.parts)
+                len(updated_cache["parts"]) if updated_cache is not None else len(result.parts)
             )
             added = max(0, updated_count - existing)
             result.notices.append(
-                f"Topped up the saved data: added {added:,} parts to "
-                f"{existing:,} saved."
+                f"Topped up the saved data: added {added:,} parts to {existing:,} saved."
             )
         return result, output_path_for(urlparse(self._url).netloc)
 

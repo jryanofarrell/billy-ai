@@ -58,7 +58,9 @@ def _descriptions(
     lowered = [label.casefold() for label in after_labels]
     if "description" in lowered:
         description_at = lowered.index("description")
-        qty_at = next((index for index, label in enumerate(lowered) if label in {"qty", "quantity"}), None)
+        qty_at = next(
+            (index for index, label in enumerate(lowered) if label in {"qty", "quantity"}), None
+        )
         prefix_labels = after_labels[:description_at]
         prefix_count = len(prefix_labels)
         prefix = _label_values(prefix_labels, after[:prefix_count])
@@ -126,25 +128,24 @@ def parse_page_tables(text: str) -> tuple[list[RawPart], list[str]]:
             expected_code_position + 1 < len(tokens)
             and not is_code(tokens[expected_code_position])
             and not is_code(tokens[expected_code_position + 1])
-            and "-"
-            in tokens[expected_code_position] + tokens[expected_code_position + 1]
-            and is_code(
-                tokens[expected_code_position] + tokens[expected_code_position + 1]
-            )
+            and "-" in tokens[expected_code_position] + tokens[expected_code_position + 1]
+            and is_code(tokens[expected_code_position] + tokens[expected_code_position + 1])
         ):
             reasons.append("possible spaced part number")
 
         code_positions = [index for index, token in enumerate(tokens) if is_code(token)]
         if not mirrored:
             code_positions = [
-                position
-                for position in code_positions
-                if position == expected_code_position
+                position for position in code_positions if position == expected_code_position
             ]
         if code_positions and (before_labels or after_labels or mirrored):
             positions = code_positions[:2] if mirrored else code_positions[:1]
             for position_index, position in enumerate(positions):
-                end = positions[position_index + 1] if position_index + 1 < len(positions) else len(tokens)
+                end = (
+                    positions[position_index + 1]
+                    if position_index + 1 < len(positions)
+                    else len(tokens)
+                )
                 before = tokens[:position] if position_index == 0 else []
                 after = tokens[position + 1 : end]
                 parts.append(

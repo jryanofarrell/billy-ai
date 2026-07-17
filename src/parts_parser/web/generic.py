@@ -122,9 +122,7 @@ def iter_sitemap_product_urls(session, config: SiteConfig, base: str) -> Iterato
     if local(root.tag) == "sitemapindex":
         for child in root:
             if local(child.tag) == "sitemap":
-                loc_el = next(
-                    (c for c in child if local(c.tag) == "loc"), None
-                )
+                loc_el = next((c for c in child if local(c.tag) == "loc"), None)
                 if loc_el is None:
                     continue
                 child_url = (loc_el.text or "").strip()
@@ -181,11 +179,7 @@ def iter_crawl_product_urls(
                 yielded.add(n)
                 page_yielded_new = True
                 yield n
-            elif (
-                category_link_pattern
-                and re.search(category_link_pattern, n)
-                and n not in visited
-            ):
+            elif category_link_pattern and re.search(category_link_pattern, n) and n not in visited:
                 visited.add(n)
                 queue.append(n)
 

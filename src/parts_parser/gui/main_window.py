@@ -198,9 +198,7 @@ class MainWindow(QMainWindow):
         box.setWindowTitle("Use saved website data?")
         box.setText(text)
         box.setIcon(QMessageBox.Icon.Question)
-        use_saved_btn = box.addButton(
-            use_saved_label, QMessageBox.ButtonRole.AcceptRole
-        )
+        use_saved_btn = box.addButton(use_saved_label, QMessageBox.ButtonRole.AcceptRole)
         box.addButton(fresh_label, QMessageBox.ButtonRole.RejectRole)
         box.setDefaultButton(use_saved_btn)
         box.exec()
@@ -254,8 +252,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Heads up",
-                warning
-                + "\n\nThe workbook contains everything collected before the stop.",
+                warning + "\n\nThe workbook contains everything collected before the stop.",
             )
         self._finish_run()
 

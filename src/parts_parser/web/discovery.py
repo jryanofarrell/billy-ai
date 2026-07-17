@@ -16,13 +16,11 @@ from parts_parser.web.session import BrowserSession, WebError
 from parts_parser.web.site_config import SiteConfig, validate_schema
 
 _SYSTEM_URL_STRUCTURE = (
-    "You reverse-engineer the URL structure of product-catalog websites. "
-    "Respond with JSON only."
+    "You reverse-engineer the URL structure of product-catalog websites. Respond with JSON only."
 )
 
 _SYSTEM_SELECTORS = (
-    "You identify CSS selectors on a product page of a parts catalog. "
-    "Respond with JSON only."
+    "You identify CSS selectors on a product page of a parts catalog. Respond with JSON only."
 )
 
 
@@ -72,9 +70,7 @@ def discover_site_config(
     home_html = _sample_html(session.get_html(base))
 
     if sitemap_url:
-        sitemap_context = (
-            f"A sitemap exists at {sitemap_url}. Sample:\n{sitemap_sample}"
-        )
+        sitemap_context = f"A sitemap exists at {sitemap_url}. Sample:\n{sitemap_sample}"
     else:
         sitemap_context = "No sitemap was found."
 
@@ -146,9 +142,7 @@ def discover_site_config(
     problems = validate_schema(config)
     if problems:
         joined = "; ".join(problems)
-        raise WebError(
-            f"Couldn't figure out this website's structure automatically. ({joined})"
-        )
+        raise WebError(f"Couldn't figure out this website's structure automatically. ({joined})")
 
     progress("Site config ready.", 1.0)
     return config
@@ -173,7 +167,9 @@ def validate_site_config(
     else:
         probe_config = dataclasses.replace(config, page_budget=20)
         url_iter = iter_crawl_product_urls(
-            session, probe_config, base,
+            session,
+            probe_config,
+            base,
             progress=lambda msg, frac: None,
             cancel=None,
         )
@@ -201,9 +197,7 @@ def validate_site_config(
             page_text = "".join(soup.get_text().split())
             part_no_stripped = "".join(record.part_no.split())
             if part_no_stripped not in page_text:
-                verbatim_problems.append(
-                    f"part number {record.part_no} not visible on {url}"
-                )
+                verbatim_problems.append(f"part number {record.part_no} not visible on {url}")
             else:
                 sample_parts.append(record)
 

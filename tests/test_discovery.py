@@ -188,9 +188,7 @@ def test_validate_site_config_passes_when_all_five_samples_parse():
 
     assert result.problems == []
     assert [part.url for part in result.sample_parts] == urls
-    assert [part.part_no for part in result.sample_parts] == [
-        f"PN-{i}" for i in range(5)
-    ]
+    assert [part.part_no for part in result.sample_parts] == [f"PN-{i}" for i in range(5)]
 
 
 def test_validate_site_config_rejects_hallucinated_part_number(monkeypatch):

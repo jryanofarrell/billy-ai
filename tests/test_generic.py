@@ -81,27 +81,36 @@ def generic_config():
 
 
 def test_normalize_url_resolves_relative_url_and_strips_fragment_and_facets():
-    assert normalize_url(
-        "/product/gx-100-a?color=brass#details",
-        BASE,
-        pagination_param="page",
-    ) == f"{BASE}/product/gx-100-a"
+    assert (
+        normalize_url(
+            "/product/gx-100-a?color=brass#details",
+            BASE,
+            pagination_param="page",
+        )
+        == f"{BASE}/product/gx-100-a"
+    )
 
 
 def test_normalize_url_keeps_only_pagination_parameter():
-    assert normalize_url(
-        "/category/fittings?color=brass&page=2&size=50#products",
-        BASE,
-        pagination_param="page",
-    ) == f"{BASE}/category/fittings?page=2"
+    assert (
+        normalize_url(
+            "/category/fittings?color=brass&page=2&size=50#products",
+            BASE,
+            pagination_param="page",
+        )
+        == f"{BASE}/category/fittings?page=2"
+    )
 
 
 def test_normalize_url_rejects_off_domain_links():
-    assert normalize_url(
-        "https://elsewhere.example/product/gx-100-a",
-        BASE,
-        pagination_param=None,
-    ) is None
+    assert (
+        normalize_url(
+            "https://elsewhere.example/product/gx-100-a",
+            BASE,
+            pagination_param=None,
+        )
+        is None
+    )
 
 
 def test_parse_product_page_preserves_part_number_and_maps_page_fields(
@@ -144,12 +153,8 @@ def test_sitemap_enumerator_filters_products_and_deduplicates(sitemap_xml):
     ]
 
 
-def test_sitemap_index_enumerator_reads_one_nested_urlset(
-    sitemap_xml, sitemap_index_xml
-):
-    session = FakeSession(
-        {"sitemap_index.xml": sitemap_index_xml, "sitemap.xml": sitemap_xml}
-    )
+def test_sitemap_index_enumerator_reads_one_nested_urlset(sitemap_xml, sitemap_index_xml):
+    session = FakeSession({"sitemap_index.xml": sitemap_index_xml, "sitemap.xml": sitemap_xml})
     config = SiteConfig(
         platform="generic",
         selectors={"part_no": ".sku"},
@@ -193,9 +198,7 @@ def test_crawl_enumerator_never_fetches_more_than_page_budget(category_html, gen
     session = FakeSession({"example.test": category_html})
 
     list(
-        iter_crawl_product_urls(
-            session, generic_config, BASE, lambda message, fraction: None, None
-        )
+        iter_crawl_product_urls(session, generic_config, BASE, lambda message, fraction: None, None)
     )
 
     assert session.html_calls == [f"{BASE}/category/fittings"]

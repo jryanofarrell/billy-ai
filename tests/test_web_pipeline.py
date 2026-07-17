@@ -175,29 +175,16 @@ def _save_cache(
 
 def _generic_sitemap_fixture() -> tuple[list[str], str, dict[str, str]]:
     urls = [f"https://example.com/products/P-{index}" for index in range(1, 4)]
-    sitemap = (
-        "<urlset>"
-        + "".join(f"<url><loc>{url}</loc></url>" for url in urls)
-        + "</urlset>"
-    )
-    html = {
-        url: f'<div class="part-number">P-{index}</div>'
-        for index, url in enumerate(urls, 1)
-    }
+    sitemap = "<urlset>" + "".join(f"<url><loc>{url}</loc></url>" for url in urls) + "</urlset>"
+    html = {url: f'<div class="part-number">P-{index}</div>' for index, url in enumerate(urls, 1)}
     return urls, sitemap, html
 
 
 def _discovery_fixture() -> tuple[FakeSession, FakeLLM]:
     urls = [f"https://example.com/products/P-{i}" for i in range(1, 6)]
-    sitemap = (
-        "<urlset>"
-        + "".join(f"<url><loc>{url}</loc></url>" for url in urls)
-        + "</urlset>"
-    )
+    sitemap = "<urlset>" + "".join(f"<url><loc>{url}</loc></url>" for url in urls) + "</urlset>"
     html = {"https://example.com": f'<a href="{urls[0]}">sample</a>'}
-    html.update(
-        {url: f'<div class="part-number">P-{i}</div>' for i, url in enumerate(urls, 1)}
-    )
+    html.update({url: f'<div class="part-number">P-{i}</div>' for i, url in enumerate(urls, 1)})
     session = FakeSession(
         html=html,
         text={"https://example.com/sitemap.xml": sitemap},
@@ -282,9 +269,7 @@ def test_cache_hit_without_hook_reuses_cache(tmp_path):
     def forbidden_factory():
         raise AssertionError("headless cache reuse must not construct a session")
 
-    result = run_web(
-        "https://example.com", store=store, session_factory=forbidden_factory
-    )
+    result = run_web("https://example.com", store=store, session_factory=forbidden_factory)
 
     assert [part.part_no for part in result.parts] == ["SAVED-1"]
 
@@ -455,9 +440,7 @@ def test_crawl_mode_fills_category_from_tree(tmp_path, categories_data, page1_da
         assert record.series in ("90-Deg Female Elbow", "Coupling")
 
 
-def test_completed_crawl_writes_complete_cache(
-    tmp_path, categories_data, page1_data, page2_data
-):
+def test_completed_crawl_writes_complete_cache(tmp_path, categories_data, page1_data, page2_data):
     store = RunStore(root=tmp_path)
     session = FakeSession(
         {
@@ -468,16 +451,12 @@ def test_completed_crawl_writes_complete_cache(
         }
     )
 
-    result = run_web(
-        "https://example.com", store=store, session_factory=_factory(session)
-    )
+    result = run_web("https://example.com", store=store, session_factory=_factory(session))
 
     cache = store.get_web_cache("example.com")
     assert cache is not None
     assert cache["complete"] is True
-    assert [part["part_no"] for part in cache["parts"]] == [
-        part.part_no for part in result.parts
-    ]
+    assert [part["part_no"] for part in cache["parts"]] == [part.part_no for part in result.parts]
 
 
 # --- unsupported site ---
@@ -599,9 +578,7 @@ def test_record_run_crawl_mode(tmp_path, categories_data, page1_data, page2_data
     assert runs[0]["data_source"] == "live"
 
 
-def test_crawl_error_after_collection_returns_partial_and_records_reason(
-    tmp_path, categories_data
-):
+def test_crawl_error_after_collection_returns_partial_and_records_reason(tmp_path, categories_data):
     store = RunStore(root=tmp_path)
     _save_cache(store, [_cached_part("OLD")], complete=True)
     old_cache = store.get_web_cache("example.com")
@@ -657,9 +634,7 @@ def test_refresh_replaces_cache_and_records_live_source(
     cache = store.get_web_cache("example.com")
     assert cache["fetched_at"] != old_fetched_at
     assert datetime.fromisoformat(cache["fetched_at"]) <= datetime.now(timezone.utc)
-    assert [part["part_no"] for part in cache["parts"]] == [
-        part.part_no for part in result.parts
-    ]
+    assert [part["part_no"] for part in cache["parts"]] == [part.part_no for part in result.parts]
     assert store.list_runs()[0]["data_source"] == "live"
 
 
@@ -818,13 +793,9 @@ def test_unknown_site_discovers_validates_runs_and_caches_with_probe(tmp_path):
     assert llm.calls == 2
 
 
-def test_resolve_site_config_cached_generic_probe_mismatch_rediscovers(
-    tmp_path, monkeypatch
-):
+def test_resolve_site_config_cached_generic_probe_mismatch_rediscovers(tmp_path, monkeypatch):
     store = RunStore(root=tmp_path)
-    cached = _generic_config(
-        probe={"url": "https://example.com/products/old", "part_no": "OLD"}
-    )
+    cached = _generic_config(probe={"url": "https://example.com/products/old", "part_no": "OLD"})
     store.save_site_config("example.com", cached.to_dict())
     session = FakeSession(
         html={"https://example.com/products/old": '<div class="part-number">CHANGED</div>'}
@@ -891,9 +862,7 @@ def test_resolve_site_config_declined_preview_does_not_cache(tmp_path, monkeypat
     store = RunStore(root=tmp_path)
     sample = GenericPartRecord("P-1", "https://example.com/products/P-1")
     monkeypatch.setattr(pipeline_module.insite, "detect", lambda session, base: False)
-    monkeypatch.setattr(
-        pipeline_module, "discover_site_config", lambda *args: _generic_config()
-    )
+    monkeypatch.setattr(pipeline_module, "discover_site_config", lambda *args: _generic_config())
     monkeypatch.setattr(
         pipeline_module,
         "validate_site_config",

@@ -41,8 +41,7 @@ def test_validate_schema_lists_missing_part_number_and_unknown_strategy():
 
     assert "selectors.part_no must be a non-empty string" in problems
     assert any(
-        "enumeration.strategy" in problem and "catalog_magic" in problem
-        for problem in problems
+        "enumeration.strategy" in problem and "catalog_magic" in problem for problem in problems
     )
     assert len(problems) == 2
 
@@ -60,9 +59,7 @@ def test_validate_schema_lists_missing_part_number_and_unknown_strategy():
         ),
     ],
 )
-def test_validate_schema_lists_every_incomplete_strategy_problem(
-    enumeration, expected_problems
-):
+def test_validate_schema_lists_every_incomplete_strategy_problem(enumeration, expected_problems):
     problems = validate_schema(
         SiteConfig(
             platform="generic",

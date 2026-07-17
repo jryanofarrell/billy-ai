@@ -41,10 +41,14 @@ def validate_schema(config: SiteConfig) -> list[str]:
     if strategy == "sitemap":
         sitemap_url = config.enumeration.get("sitemap_url", "")
         if not isinstance(sitemap_url, str) or not sitemap_url.strip():
-            problems.append("enumeration.sitemap_url must be a non-empty string for sitemap strategy")
+            problems.append(
+                "enumeration.sitemap_url must be a non-empty string for sitemap strategy"
+            )
         pattern = config.enumeration.get("product_url_pattern", "")
         if not isinstance(pattern, str) or not pattern.strip():
-            problems.append("enumeration.product_url_pattern must be a non-empty string for sitemap strategy")
+            problems.append(
+                "enumeration.product_url_pattern must be a non-empty string for sitemap strategy"
+            )
         else:
             try:
                 re.compile(pattern)
@@ -53,10 +57,14 @@ def validate_schema(config: SiteConfig) -> list[str]:
     elif strategy == "category_crawl":
         start_urls = config.enumeration.get("start_urls")
         if not isinstance(start_urls, list) or len(start_urls) == 0:
-            problems.append("enumeration.start_urls must be a non-empty list for category_crawl strategy")
+            problems.append(
+                "enumeration.start_urls must be a non-empty list for category_crawl strategy"
+            )
         link_pattern = config.enumeration.get("product_link_pattern", "")
         if not isinstance(link_pattern, str) or not link_pattern.strip():
-            problems.append("enumeration.product_link_pattern must be a non-empty string for category_crawl strategy")
+            problems.append(
+                "enumeration.product_link_pattern must be a non-empty string for category_crawl strategy"
+            )
         else:
             try:
                 re.compile(link_pattern)
