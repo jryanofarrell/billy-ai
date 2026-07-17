@@ -1,13 +1,16 @@
+from pathlib import Path
+
 import pytest
 
 from parts_parser.web import discovery
 from parts_parser.web.discovery import discover_site_config, validate_site_config
-from parts_parser.web.generic import PartRecord
+from parts_parser.web.generic import PartRecord, scan_sitemap
 from parts_parser.web.session import WebError
 from parts_parser.web.site_config import SiteConfig
 
 
 BASE = "https://example.test"
+FIXTURES = Path(__file__).parent / "fixtures" / "generic"
 
 
 class FakeLLM:
@@ -70,6 +73,24 @@ def _validation_session(count=5, *, parseable=None):
     return FakeSession(html=html), urls
 
 
+def _fixture(name):
+    return (FIXTURES / name).read_text()
+
+
+def _url_structure_response(product_url):
+    return {
+        "product_url_example": product_url,
+        "product_url_pattern": r"/catalog/",
+        "category_link_pattern": None,
+        "pagination_param": None,
+        "search_url_template": None,
+        "strategy": "sitemap",
+    }
+
+
+SELECTOR_RESPONSE = {"part_no": ".sku", "breadcrumb": None, "attributes": None}
+
+
 def test_sample_html_strips_scripts_and_styles_and_truncates():
     html = "<p>keep</p><script>secret()</script><style>.hidden{}</style><p>tail</p>"
 
@@ -102,7 +123,7 @@ def test_discover_site_config_assembles_config_from_two_llm_calls():
         text={
             f"{BASE}/sitemap.xml": WebError("missing"),
             f"{BASE}/robots.txt": f"Sitemap: {sitemap_url}",
-            sitemap_url: f"<urlset><loc>{product_url}</loc></urlset>",
+            sitemap_url: f"<urlset><url><loc>{product_url}</loc></url></urlset>",
         },
     )
     llm = FakeLLM(
@@ -132,6 +153,105 @@ def test_discover_site_config_assembles_config_from_two_llm_calls():
     assert len(llm.calls) == 2
     assert product_url in llm.calls[0]["user"]
     assert "GX-100" in llm.calls[1]["user"]
+
+
+def test_discover_site_config_uses_minority_image_tags_without_enumeration_llm():
+    sitemap_url = f"{BASE}/sitemap.xml"
+    product_url = f"{BASE}/catalog/alpha-100"
+    session = FakeSession(
+        html={product_url: '<span class="sku">ALPHA-100</span>'},
+        text={sitemap_url: _fixture("sitemap_images_minority.xml")},
+    )
+    llm = FakeLLM(SELECTOR_RESPONSE)
+
+    config = discover_site_config(session, llm, BASE)
+
+    assert config.enumeration == {
+        "strategy": "sitemap_images",
+        "sitemap_url": sitemap_url,
+    }
+    assert session.html_calls == [product_url]
+    assert len(llm.calls) == 1
+    assert "Product page content follows" in llm.calls[0]["user"]
+
+
+def test_discover_site_config_all_image_tags_fall_back_to_enumeration_llm():
+    sitemap_url = f"{BASE}/sitemap.xml"
+    product_url = f"{BASE}/catalog/all-200"
+    session = FakeSession(
+        html={
+            BASE: "<h1>Invented catalog</h1>",
+            product_url: '<b class="sku">ALL-200</b>',
+        },
+        text={sitemap_url: _fixture("sitemap_images_all.xml")},
+    )
+    llm = FakeLLM(_url_structure_response(product_url), SELECTOR_RESPONSE)
+
+    config = discover_site_config(session, llm, BASE)
+
+    assert config.enumeration["strategy"] == "sitemap"
+    assert len(llm.calls) == 2
+    assert "Site: https://example.test" in llm.calls[0]["user"]
+
+
+def test_discover_site_config_no_image_tags_samples_across_sitemap():
+    sitemap_url = f"{BASE}/sitemap.xml"
+    product_url = f"{BASE}/catalog/item-28"
+    session = FakeSession(
+        html={
+            BASE: "<h1>Invented catalog</h1>",
+            product_url: '<b class="sku">ITEM-28</b>',
+        },
+        text={sitemap_url: _fixture("sitemap_no_images.xml")},
+    )
+    llm = FakeLLM(_url_structure_response(product_url), SELECTOR_RESPONSE)
+
+    discover_site_config(session, llm, BASE)
+
+    enumeration_prompt = llm.calls[0]["user"]
+    assert f"{BASE}/catalog/item-00" in enumeration_prompt
+    assert f"{BASE}/catalog/item-28" in enumeration_prompt
+    assert f"{BASE}/catalog/item-01" not in enumeration_prompt
+    assert enumeration_prompt.count("\n- https://example.test/catalog/item-") == 15
+
+
+def test_scan_sitemap_index_partitions_entries_from_both_children():
+    sitemap_url = f"{BASE}/sitemap.xml"
+    session = FakeSession(
+        text={
+            sitemap_url: _fixture("sitemap_images_index.xml"),
+            f"{BASE}/maps/catalog-a.xml": _fixture("sitemap_images_child_a.xml"),
+            f"{BASE}/maps/catalog-b.xml": _fixture("sitemap_images_child_b.xml"),
+        }
+    )
+
+    result = scan_sitemap(session, sitemap_url)
+
+    assert result.image_tagged == [
+        f"{BASE}/catalog/child-a-product",
+        f"{BASE}/catalog/child-b-product",
+    ]
+    assert result.other == [f"{BASE}/category/child-a", f"{BASE}/category/child-b"]
+    assert result.truncated is False
+
+
+def test_discover_site_config_force_llm_skips_image_tag_bypass():
+    sitemap_url = f"{BASE}/sitemap.xml"
+    product_url = f"{BASE}/catalog/beta-200"
+    session = FakeSession(
+        html={
+            BASE: "<h1>Invented catalog</h1>",
+            product_url: '<b class="sku">BETA-200</b>',
+        },
+        text={sitemap_url: _fixture("sitemap_images_minority.xml")},
+    )
+    llm = FakeLLM(_url_structure_response(product_url), SELECTOR_RESPONSE)
+
+    config = discover_site_config(session, llm, BASE, force_llm=True)
+
+    assert config.enumeration["strategy"] == "sitemap"
+    assert len(llm.calls) == 2
+    assert "includes a product image" in llm.calls[0]["user"]
 
 
 def test_discover_site_config_rejects_invented_product_url():

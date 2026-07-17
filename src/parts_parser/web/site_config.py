@@ -77,9 +77,15 @@ def validate_schema(config: SiteConfig) -> list[str]:
                     re.compile(val)
                 except re.error as exc:
                     problems.append(f"enumeration.{opt_key} is not a valid regex: {exc}")
+    elif strategy == "sitemap_images":
+        sitemap_url = config.enumeration.get("sitemap_url", "")
+        if not isinstance(sitemap_url, str) or not sitemap_url.strip():
+            problems.append(
+                "enumeration.sitemap_url must be a non-empty string for sitemap_images strategy"
+            )
     else:
         problems.append(
-            f"enumeration.strategy must be 'sitemap' or 'category_crawl', got {strategy!r}"
+            f"enumeration.strategy must be 'sitemap', 'category_crawl', or 'sitemap_images', got {strategy!r}"
         )
 
     return problems

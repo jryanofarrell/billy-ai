@@ -129,7 +129,7 @@ def resolve_site_config(
     config = discover_site_config(session, llm_factory(), base, progress)
     validation = validate_site_config(session, config, base)
     if validation.problems:
-        config = discover_site_config(session, llm_factory(), base, progress)
+        config = discover_site_config(session, llm_factory(), base, progress, force_llm=True)
         validation = validate_site_config(session, config, base)
         if validation.problems:
             raise WebError(

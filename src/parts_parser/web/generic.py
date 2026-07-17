@@ -10,6 +10,80 @@ from bs4 import BeautifulSoup
 from parts_parser.web.site_config import SiteConfig
 from parts_parser.web.session import WebError
 
+NAMESPACE_IMAGE = "{http://www.google.com/schemas/sitemap-image/1.1}image"
+
+
+@dataclass
+class SitemapScan:
+    image_tagged: list[str]
+    other: list[str]
+    truncated: bool
+
+
+def scan_sitemap(
+    session,
+    sitemap_url: str,
+    *,
+    url_cap: int = 50_000,
+    file_cap: int = 20,
+) -> SitemapScan:
+    image_tagged: list[str] = []
+    other: list[str] = []
+    truncated = False
+
+    def local(tag: str) -> str:
+        return tag.split("}")[-1] if "}" in tag else tag
+
+    def _scan_urlset(urlset_root: ET.Element) -> bool:
+        """Returns True if the cap was hit."""
+        for url_el in urlset_root:
+            if local(url_el.tag) != "url":
+                continue
+            loc_el = next((c for c in url_el if local(c.tag) == "loc"), None)
+            if loc_el is None:
+                continue
+            loc = (loc_el.text or "").strip()
+            if not loc:
+                continue
+            has_image = any(c.tag == NAMESPACE_IMAGE or local(c.tag) == "image" for c in url_el)
+            if has_image:
+                image_tagged.append(loc)
+            else:
+                other.append(loc)
+            if len(image_tagged) + len(other) >= url_cap:
+                return True
+        return False
+
+    xml_text = session.get_text(sitemap_url)
+    root = ET.fromstring(xml_text)
+
+    if local(root.tag) == "sitemapindex":
+        files_read = 0
+        for child in root:
+            if local(child.tag) != "sitemap":
+                continue
+            loc_el = next((c for c in child if local(c.tag) == "loc"), None)
+            if loc_el is None:
+                continue
+            child_url = (loc_el.text or "").strip()
+            if not child_url:
+                continue
+            if files_read >= file_cap:
+                truncated = True
+                break
+            child_xml = session.get_text(child_url)
+            child_root = ET.fromstring(child_xml)
+            files_read += 1
+            if local(child_root.tag) == "urlset":
+                if _scan_urlset(child_root):
+                    truncated = True
+                    break
+    elif local(root.tag) == "urlset":
+        if _scan_urlset(root):
+            truncated = True
+
+    return SitemapScan(image_tagged=image_tagged, other=other, truncated=truncated)
+
 
 @dataclass
 class PartRecord:
@@ -102,6 +176,17 @@ def parse_product_page(html: str, url: str, config: SiteConfig) -> PartRecord | 
 
 def iter_sitemap_product_urls(session, config: SiteConfig, base: str) -> Iterator[str]:
     enumeration = config.enumeration
+    strategy = enumeration.get("strategy")
+
+    if strategy == "sitemap_images":
+        scan = scan_sitemap(session, enumeration["sitemap_url"])
+        yielded: set[str] = set()
+        for loc in scan.image_tagged:
+            if loc not in yielded:
+                yielded.add(loc)
+                yield loc
+        return
+
     xml_text = session.get_text(enumeration["sitemap_url"])
     root = ET.fromstring(xml_text)
     pattern = enumeration["product_url_pattern"]
@@ -109,14 +194,14 @@ def iter_sitemap_product_urls(session, config: SiteConfig, base: str) -> Iterato
     def local(tag: str) -> str:
         return tag.split("}")[-1] if "}" in tag else tag
 
-    yielded: set[str] = set()
+    yielded_set: set[str] = set()
 
     def _process_urlset(urlset_root: ET.Element) -> Iterator[str]:
         for element in urlset_root.iter():
             if local(element.tag) == "loc":
                 loc = (element.text or "").strip()
-                if loc and re.search(pattern, loc) and loc not in yielded:
-                    yielded.add(loc)
+                if loc and re.search(pattern, loc) and loc not in yielded_set:
+                    yielded_set.add(loc)
                     yield loc
 
     if local(root.tag) == "sitemapindex":

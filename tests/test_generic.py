@@ -153,6 +153,33 @@ def test_sitemap_enumerator_filters_products_and_deduplicates(sitemap_xml):
     ]
 
 
+def test_sitemap_images_enumerator_yields_image_tagged_urls_in_document_order():
+    sitemap_xml = f"""\
+    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+            xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+      <url><loc>{BASE}/category/fittings</loc></url>
+      <url><loc>{BASE}/product/gx-200-b</loc><image:image /></url>
+      <url><loc>{BASE}/product/gx-100-a</loc><image:image /></url>
+      <url><loc>{BASE}/product/gx-200-b</loc><image:image /></url>
+      <url><loc>{BASE}/about</loc></url>
+    </urlset>
+    """
+    session = FakeSession({"sitemap.xml": sitemap_xml})
+    config = SiteConfig(
+        platform="generic",
+        selectors={"part_no": ".sku"},
+        enumeration={
+            "strategy": "sitemap_images",
+            "sitemap_url": f"{BASE}/sitemap.xml",
+        },
+    )
+
+    assert list(iter_sitemap_product_urls(session, config, BASE)) == [
+        f"{BASE}/product/gx-200-b",
+        f"{BASE}/product/gx-100-a",
+    ]
+
+
 def test_sitemap_index_enumerator_reads_one_nested_urlset(sitemap_xml, sitemap_index_xml):
     session = FakeSession({"sitemap_index.xml": sitemap_index_xml, "sitemap.xml": sitemap_xml})
     config = SiteConfig(

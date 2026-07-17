@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+  <url><loc>https://example.test/catalog/all-100</loc><image:image><image:loc>https://example.test/images/all-100.png</image:loc></image:image></url>
+  <url><loc>https://example.test/catalog/all-200</loc><image:image><image:loc>https://example.test/images/all-200.png</image:loc></image:image></url>
+  <url><loc>https://example.test/catalog/all-300</loc><image:image><image:loc>https://example.test/images/all-300.png</image:loc></image:image></url>
+</urlset>
