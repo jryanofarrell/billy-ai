@@ -16,11 +16,46 @@ provider-agnostic LLM boundary, and local persistent run state.
 | `src/parts_parser/pdf/extract.py` | Extracts per-page text from a PDF via `pypdf`; classifies pages as digital or scanned. |
 | `src/parts_parser/pdf/toc.py` | Detects TOC pages by dotted-leader density and parses them into ordered sections via one `complete_json` call. Prompt lives here. |
 | `src/parts_parser/pdf/pages.py` | Sends the per-page extraction prompt and returns parts/subcategory/skip for each page. Prompt lives here. |
+| `src/parts_parser/pdf/tables.py` | Deterministically extracts regular PDF table rows into verbatim `RawPart` records and reports page-level reasons to use the AI fallback. |
 | `src/parts_parser/pdf/validate.py` | Drops parts whose number isn't found in the page text, deduplicates, assigns sequence, and reports totals/drops/dupes. |
-| `src/parts_parser/pdf/pipeline.py` | Orchestrates the full PDF run: cache lookup, extraction, TOC parse, per-page AI calls, validation, filter matching, and `record_run`. |
+| `src/parts_parser/pdf/pipeline.py` | Orchestrates the full PDF run: cache lookup, extraction, TOC parse, deterministic per-page table parsing with triggered AI fallback, validation, filter matching, and `record_run`. |
 | `src/parts_parser/web/` | Provides the throttled Playwright browser session, Insite/Optimizely API adapter, and filter-or-crawl web pipeline. |
+| `src/parts_parser/web/site_config.py` | Defines the provider-neutral `SiteConfig` schema, dict serialization, and generic-config schema validation. |
+| `src/parts_parser/web/generic.py` | Deterministically enumerates and parses non-Insite sites from a `SiteConfig`, including sitemap, bounded crawl, and search-template paths. |
+| `src/parts_parser/web/discovery.py` | Uses two structure-discovery LLM calls to derive a generic site config, then validates it against sampled product pages. |
 | `src/parts_parser/gui/` | Provides the PySide6 desktop UI: source and optional-filter drop zones, saved settings dialog, main-window pipeline controls, and background worker wiring for web and PDF runs. |
+| `src/parts_parser/keepawake.py` | Best-effort context manager that prevents system sleep while a worker run is active. |
 | `src/parts_parser/__main__.py` | Creates the Qt application and opens the `Parts Catalog Parser` window; launch it with `python -m parts_parser`. |
+
+## Deterministic PDF tables
+
+`pdf/tables.py` applies five description rules in priority order: a
+`Description` column is captured as free text, with a trailing numeric `Qty` or
+`Quantity` labeled separately; values on both sides of `PART No.` retain labels
+from both sides; ordinary columns after `PART No.` become `Label: value` pairs;
+tables with all size columns before `PART No.` use those preceding labels; and a
+part-only row gets an empty description. Mirrored headers containing two
+`PART No.` columns emit both sides of each row.
+
+The part-code test requires at least one digit and either a hyphen or a letter,
+while rejecting values that are entirely simple or mixed-number fractions. It
+therefore accepts shapes such as `1460-4`, `S3749-2A`, and `GO9-72`, but rejects
+`3/8`, `.122`, and `1-1/4`. Accepted part numbers are stored exactly as they
+appear in the page text.
+
+A page uses AI extraction only when deterministic parsing reports one or more
+fallback triggers:
+
+- adjacent tokens may form a spaced part number;
+- a table-like row has an unrecognized part-number shape;
+- a page with at least 40 whitespace-delimited tokens produces no parts.
+
+`pdf/pipeline.py` logs every fallback decision to the `parts_parser` logger:
+one INFO line per AI-fallback page with its trigger reasons and the
+deterministic part count, DEBUG lines for deterministic and blank pages, and an
+end-of-run INFO summary of page counts. `logging_setup.setup_logging()`, called
+from `__main__`, writes the package logger to a rotating file at
+`<app-data>/logs/parts_parser.log`.
 
 ## Insite endpoint facts
 
@@ -51,6 +86,7 @@ PartsParser/
 ├── settings.json
 ├── site_configs/
 ├── pdf_cache/
+├── web_cache/
 └── runs.jsonl
 ```
 
@@ -59,14 +95,114 @@ PartsParser/
 - `site_configs/` stores one JSON file per normalized domain.
 - `pdf_cache/` stores parsed results in JSON files keyed by the source PDF's
   SHA-256 hash. Each cache file has the shape
-  `{"parts": [...], "validation": {...}}` where `parts` is the list of raw
-  `PartRecord`-compatible dicts and `validation` holds the summary counts
-  (totals, skipped pages, drops, duplicates).
+  `{"parts": [...], "validation": {...}, "complete": <bool>}` where `parts`
+  is the list of raw `PartRecord`-compatible dicts and `validation` holds the
+  summary counts (totals, skipped pages, drops, duplicates). Only entries with
+  `complete: true` are cache hits. A stopped-early parse is persisted with
+  `complete: false` for partial-state visibility but is never served as cached
+  output; a later run reparses the file.
+- `web_cache/` stores one crawl per normalized domain with the shape
+  `{"fetched_at": <UTC ISO timestamp>, "crawl_seconds": <seconds>,
+  "complete": <bool>, "parts": [...], "progress": [...]}`. `progress` is present
+  only on an incomplete payload and lists the completed crawl unit keys. A later
+  full-site collection replaces the prior payload. Completed crawls set
+  `complete: true` and omit `progress`; crawls that stop early, including
+  enumeration that stops after finding every requested filter entry, retain the
+  collected parts with `complete: false` and their completed-unit progress.
 - `runs.jsonl` is append-only run history; each record receives an ID and UTC
-  timestamp.
+  timestamp. Partial-run records also include their `stopped_early` reason, and
+  web records identify `data_source` as `cache`, `live`, or `cache+resume`.
 
 Tests can set `PARTS_PARSER_DATA_DIR` to redirect all default app-data access
 to a temporary directory.
+
+## Website cache behavior
+
+When saved website data exists, the GUI shows its age, part count, completeness,
+and estimated re-crawl time, then defaults to using it. Headless runs also reuse
+saved data by default. Choosing fresh data performs a live crawl and replaces the
+saved payload.
+
+Complete and partial caches have different reuse behavior. Using a complete cache
+returns its parts without starting collection. Using a partial cache seeds the run
+with its saved parts and resumes collection with `skip_keys = set(progress)`, so
+completed units are not fetched again; the GUI describes this as finishing the
+remaining work, and the completed run reports that it topped up the saved data.
+If the resumed crawl completes, its replacement cache is complete and has no
+`progress`. If it stops again, the replacement remains incomplete, its parts
+include the prior saved parts, and `progress` is the union of previously and newly
+completed unit keys. Choosing fresh ignores either kind of cache, including any
+partial progress, and collects every unit again.
+
+Full-site collection is organized into independently resumable units. Insite uses
+the leaf category ID as its unit key and yields `(unit_key, records)` after each
+leaf category completes. Generic enumeration uses the product URL as its unit key;
+`run_generic` accepts `skip_keys` and records each completed URL. Both paths skip
+fetching keys supplied in `skip_keys`.
+
+Filter lists of at most 500 entries use per-part search when the site supports it
+and do not write a website cache. Larger lists perform full-site enumeration,
+cache the collected site data, and match afterward. On a discovered site without
+search, enumeration may stop once every filter entry has matched; that cache is
+retained but marked `complete: false`.
+
+Refreshing one complete cache with another complete crawl produces a drift notice
+when the new crawl contains fewer than 50% of the old part count. It also produces
+a notice when attributes existed on more than half of the old parts but are empty
+across every new part. These notices are attached to the web result and surfaced
+by the GUI after the run.
+
+## Stopped-early results
+
+`WebRunResult` and `PdfRunResult` both expose `stopped_early: str | None`.
+`None` means a clean run. A plain-language reason means collection stopped
+after usable records were produced, so the result is a success with a warning:
+the collected records remain available, filter matching and its match report
+are computed against those partial records, and run history records the reason.
+Errors before usable collection still raise rather than becoming partial
+successes.
+
+`WebRunResult` also exposes `progress: list[str]`, containing the completed crawl
+unit keys. A full crawl lists every unit, while a stopped-early crawl lists only
+units that completed. On a resumed run this list includes both saved progress and
+units completed during the current attempt.
+
+For PDF runs, cancellation or an LLM failure during the page loop validates and
+returns parts from completed pages. Such parses are marked `complete: false` in
+the PDF cache and are never reused; only a fully completed parse is stored with
+`complete: true` and can satisfy a later cache lookup.
+
+The GUI worker treats a stopped-early result containing at least one part as a
+successful run: it writes the workbook, reports
+`Done — N parts · saved to <path> (stopped early)`, and shows an information
+dialog containing the reason. A stopped-early result with no parts is presented
+as a failure. Clean-run presentation is unchanged.
+
+## Keep-awake behavior
+
+The worker holds `keep_awake()` around its entire run body. On macOS the context
+manager starts `caffeinate -i -m` and terminates it on exit. On Windows it calls
+`SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)` on entry and
+resets the state with `ES_CONTINUOUS` on exit. Other platforms are no-ops, and
+any acquisition or cleanup failure is silently ignored so power-management
+support cannot break a parser run. Display sleep is not prevented.
+
+## Site-config schema
+
+`src/parts_parser/web/site_config.py` is the source of truth for the serialized
+`SiteConfig` schema. Every config contains `platform`, `enumeration`, `selectors`,
+optional `search_url_template` and `probe` values, and a bounded `page_budget`.
+For generic sites, `selectors.part_no` is required. Enumeration uses either a
+`sitemap` strategy (`sitemap_url` plus `product_url_pattern`) or a
+`category_crawl` strategy (`start_urls` plus `product_link_pattern`, with optional
+`category_link_pattern` and `pagination_param`). Selector configs may also include
+`breadcrumb` and an `attributes` mapping with `row`, `label`, and `value` CSS
+selectors.
+
+The run store saves the config as JSON at
+`PartsParser/site_configs/<normalized-domain>.json`. A successful discovery is
+cached only after validation and first-run preview confirmation; later runs load
+that file and use its probe to check that it is still valid before parsing.
 
 ## Output workbook shape
 

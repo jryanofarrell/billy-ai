@@ -7,9 +7,11 @@ if getattr(sys, "frozen", False):
 from PySide6.QtWidgets import QApplication
 
 from parts_parser.gui.main_window import MainWindow
+from parts_parser.logging_setup import setup_logging
 
 
 def main() -> int:
+    setup_logging()
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()

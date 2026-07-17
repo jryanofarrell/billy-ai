@@ -1,17 +1,21 @@
 import dataclasses
+import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from parts_parser.llm import LLMClient, get_client
+from parts_parser.llm import LLMClient, LLMError, get_client
 from parts_parser.models import PartRecord
 from parts_parser.output.filtering import FilterSheet, MatchReport, match_parts
 from parts_parser.pdf.extract import PdfError, extract_text, is_digital
 from parts_parser.pdf.pages import PageResult, extract_page_parts
+from parts_parser.pdf.tables import parse_page_tables
 from parts_parser.pdf.toc import find_toc_pages, parse_toc, section_for_page
 from parts_parser.pdf.validate import validate_parts
 from parts_parser.store import RunStore, hash_file
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -19,6 +23,11 @@ class PdfRunResult:
     parts: list[PartRecord]
     match_report: MatchReport | None
     validation: dict
+    stopped_early: str | None = None
+
+
+class _Cancelled(Exception):
+    """Signal that page extraction stopped at the operator's request."""
 
 
 def run_pdf(
@@ -32,12 +41,14 @@ def run_pdf(
 ) -> PdfRunResult:
     file_hash = hash_file(path)
     cached = store.get_pdf_cache(file_hash)
+    cache_hit = bool(cached and cached.get("complete") is True)
+    stopped_early: str | None = None
 
-    if cached:
+    if cache_hit:
+        assert cached is not None
         parts = [PartRecord(**d) for d in cached["parts"]]
         validation = cached["validation"]
     else:
-        llm = llm or get_client()
         pages = extract_text(path)
 
         if not is_digital(pages):
@@ -47,48 +58,120 @@ def run_pdf(
             )
 
         toc_idx = find_toc_pages(pages)
-        sections = (
-            parse_toc(llm, "\n".join(pages[i] for i in toc_idx), len(pages)) if toc_idx else []
-        )
+        if toc_idx:
+            llm = llm or get_client()
+            sections = parse_toc(llm, "\n".join(pages[i] for i in toc_idx), len(pages))
+        else:
+            sections = []
 
         page_results: list[PageResult] = []
-        for i, text in enumerate(pages):
-            if cancel is not None and cancel.is_set():
-                raise PdfError("Cancelled.")
-            progress(f"Reading page {i + 1} of {len(pages)}…", i / len(pages))
-            if len("".join(text.split())) < 40:
-                page_results.append(
-                    PageResult(
-                        page_no=i + 1,
-                        subcategory="",
-                        parts=[],
-                        skipped=True,
-                        skip_reason="blank",
+        page_counts = {"deterministic": 0, "ai": 0, "blank": 0}
+        current_page = 1
+        try:
+            for i, text in enumerate(pages):
+                current_page = i + 1
+                if cancel is not None and cancel.is_set():
+                    raise _Cancelled
+                progress(f"Reading page {current_page} of {len(pages)}…", i / len(pages))
+                if len("".join(text.split())) < 40:
+                    page_counts["blank"] += 1
+                    logger.debug("page %d/%d: skipped (blank)", current_page, len(pages))
+                    page_results.append(
+                        PageResult(
+                            page_no=current_page,
+                            subcategory="",
+                            parts=[],
+                            skipped=True,
+                            skip_reason="blank",
+                        )
                     )
-                )
-                continue
-            section = section_for_page(sections, i + 1)
-            category = section.category if section is not None else ""
-            page_results.append(extract_page_parts(llm, text, i + 1, category))
+                    continue
+                section = section_for_page(sections, current_page)
+                category = section.category if section is not None else ""
+                det_parts, reasons = parse_page_tables(text)
+                if reasons:
+                    page_counts["ai"] += 1
+                    logger.info(
+                        "page %d/%d: AI fallback — %s (deterministic pass found %d parts)",
+                        current_page,
+                        len(pages),
+                        "; ".join(reasons),
+                        len(det_parts),
+                    )
+                    progress(
+                        f"Reading page {current_page} of {len(pages)} (AI)…",
+                        i / len(pages),
+                    )
+                    llm = llm or get_client()
+                    page_result = extract_page_parts(llm, text, current_page, category)
+                else:
+                    page_counts["deterministic"] += 1
+                    logger.debug(
+                        "page %d/%d: deterministic, %d parts",
+                        current_page,
+                        len(pages),
+                        len(det_parts),
+                    )
+                    page_title = next(
+                        (line.strip() for line in text.splitlines() if line.strip()),
+                        "",
+                    )
+                    page_result = PageResult(
+                        page_no=current_page,
+                        subcategory=page_title,
+                        parts=det_parts,
+                        skipped=not det_parts,
+                        skip_reason=None,
+                    )
+                page_results.append(page_result)
+        except _Cancelled:
+            stopped_early = f"Cancelled on page {current_page} of {len(pages)}."
+        except LLMError as error:
+            if not page_results:
+                raise
+            stopped_early = f"Stopped on page {current_page} of {len(pages)} ({error})."
 
+        logger.info(
+            "%s: %d pages — %d deterministic, %d AI fallback, %d blank",
+            path.name,
+            len(pages),
+            page_counts["deterministic"],
+            page_counts["ai"],
+            page_counts["blank"],
+        )
         parts, report = validate_parts(page_results, pages, sections)
         validation = dataclasses.asdict(report)
         store.save_pdf_cache(
             file_hash,
-            {"parts": [dataclasses.asdict(p) for p in parts], "validation": validation},  # type: ignore[arg-type]
+            {
+                "parts": [dataclasses.asdict(p) for p in parts],
+                "validation": validation,
+                "complete": stopped_early is None,
+            },  # type: ignore[arg-type]
         )
 
-    store.record_run(
-        {
-            "source": path.name,
-            "kind": "pdf",
-            "parts": len(parts),
-            "cache_hit": bool(cached),
-        }
-    )
+    run_record = {
+        "source": path.name,
+        "kind": "pdf",
+        "parts": len(parts),
+        "cache_hit": cache_hit,
+    }
+    if stopped_early is not None:
+        run_record["stopped_early"] = stopped_early
+    store.record_run(run_record)
 
     if filter_sheet is not None:
         matched, match_report = match_parts(filter_sheet, parts)
-        return PdfRunResult(parts=matched, match_report=match_report, validation=validation)
+        return PdfRunResult(
+            parts=matched,
+            match_report=match_report,
+            validation=validation,
+            stopped_early=stopped_early,
+        )
 
-    return PdfRunResult(parts=parts, match_report=None, validation=validation)
+    return PdfRunResult(
+        parts=parts,
+        match_report=None,
+        validation=validation,
+        stopped_early=stopped_early,
+    )

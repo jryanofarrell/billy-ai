@@ -66,6 +66,29 @@ class BrowserSession:
                 raise last_error  # deterministic failure — retrying won't help
         raise last_error
 
+    def get_html(self, url: str) -> str:
+        assert self._page is not None, "Call __enter__ first"
+        elapsed = time.monotonic() - self._last_request
+        if elapsed < self._min_interval:
+            time.sleep(self._min_interval - elapsed)
+        self._last_request = time.monotonic()
+        response = self._page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+        self._page.wait_for_timeout(1_500)
+        if response is not None and response.status >= 400:
+            raise WebError(f"The website returned an error (HTTP {response.status}).")
+        return self._page.content()
+
+    def get_text(self, url: str) -> str:
+        assert self._context is not None, "Call __enter__ first"
+        elapsed = time.monotonic() - self._last_request
+        if elapsed < self._min_interval:
+            time.sleep(self._min_interval - elapsed)
+        self._last_request = time.monotonic()
+        resp = self._context.request.get(url)
+        if resp.status != 200:
+            raise WebError(f"The website returned an error (HTTP {resp.status}).")
+        return resp.text()
+
     def __exit__(
         self,
         exc_type: type[BaseException] | None,

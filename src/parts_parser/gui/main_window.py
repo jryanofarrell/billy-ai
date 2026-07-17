@@ -1,5 +1,7 @@
 """Main window for the parts catalog parser desktop application."""
 
+from datetime import datetime, timezone
+from math import ceil
 from pathlib import Path
 
 from PySide6.QtCore import QUrl
@@ -22,6 +24,7 @@ from parts_parser.gui.drop_zone import DropZone
 from parts_parser.gui.settings_dialog import SettingsDialog
 from parts_parser.gui.source_panels import PdfPanel, UrlPanel
 from parts_parser.gui.worker import PipelineWorker
+from parts_parser.web.pipeline import CachedDataInfo
 
 
 def _display_path(path: str) -> str:
@@ -156,8 +159,71 @@ class MainWindow(QMainWindow):
         worker.progressed.connect(self._show_progress)
         worker.succeeded.connect(self._run_succeeded)
         worker.failed.connect(self._run_failed)
+        worker.previewReady.connect(self._on_preview_ready)
+        worker.cacheDecision.connect(self._on_cache_decision)
         worker.finished.connect(worker.deleteLater)
         worker.start()
+
+    def _on_cache_decision(self, info: CachedDataInfo) -> None:
+        self.status_label.setText("Waiting for your choice…")
+        days_ago = (datetime.now(timezone.utc).date() - info.fetched_at.date()).days
+        if days_ago <= 0:
+            age = "today"
+        elif days_ago == 1:
+            age = "yesterday"
+        else:
+            age = f"{days_ago} days ago"
+
+        estimate = (
+            f"{ceil(info.estimated_crawl_seconds / 60)} minutes"
+            if info.estimated_crawl_seconds is not None
+            else "a while"
+        )
+        if info.complete:
+            text = (
+                f"I have data for this website from {age} "
+                f"({info.part_count:,} parts).\n\n"
+                f"Re-downloading takes about {estimate}."
+            )
+            use_saved_label = "Use saved data"
+            fresh_label = "Get fresh data"
+        else:
+            text = (
+                f"I have partial data from {age} ({info.part_count:,} parts). "
+                f"Use it to finish the remaining ~{estimate}, or start fresh?"
+            )
+            use_saved_label = "Use saved & finish"
+            fresh_label = "Start fresh"
+        box = QMessageBox(self)
+        box.setWindowTitle("Use saved website data?")
+        box.setText(text)
+        box.setIcon(QMessageBox.Icon.Question)
+        use_saved_btn = box.addButton(use_saved_label, QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(fresh_label, QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(use_saved_btn)
+        box.exec()
+        if self._worker is not None:
+            self._worker.answer_cache_decision(box.clickedButton() == use_saved_btn)
+
+    def _on_preview_ready(self, sample: list) -> None:
+        self.status_label.setText("Waiting for your confirmation…")
+        lines = []
+        for record in sample[:5]:
+            loc = " / ".join(p for p in [record.category, record.subcategory] if p)
+            lines.append(f"{record.part_no} — {loc}" if loc else record.part_no)
+        text = (
+            "This is the first run against this website. Here's what I found"
+            " — do these look right?\n\n" + "\n".join(lines)
+        )
+        box = QMessageBox(self)
+        box.setWindowTitle("New website — check these parts")
+        box.setText(text)
+        box.setIcon(QMessageBox.Icon.Question)
+        continue_btn = box.addButton("Continue", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if self._worker is not None:
+            self._worker.answer_preview(box.clickedButton() == continue_btn)
 
     def _cancel_run(self) -> None:
         if self._worker is not None:
@@ -173,12 +239,21 @@ class MainWindow(QMainWindow):
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(percent)
 
-    def _run_succeeded(self, path: str, part_count: int) -> None:
+    def _run_succeeded(self, path: str, part_count: int, warning: str) -> None:
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(100)
-        self.status_label.setText(f"Done — {part_count:,} parts · saved to {_display_path(path)}")
+        status = f"Done — {part_count:,} parts · saved to {_display_path(path)}"
+        if warning:
+            status += " (stopped early)"
+        self.status_label.setText(status)
         self.status_label.setToolTip(path)
         self._configure_open_button(path)
+        if warning:
+            QMessageBox.information(
+                self,
+                "Heads up",
+                warning + "\n\nThe workbook contains everything collected before the stop.",
+            )
         self._finish_run()
 
     def _run_failed(self, message: str) -> None:

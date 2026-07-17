@@ -30,8 +30,10 @@ class RunStore:
         self.root = root if root is not None else app_data_dir()
         self.site_configs_dir = self.root / "site_configs"
         self.pdf_cache_dir = self.root / "pdf_cache"
+        self.web_cache_dir = self.root / "web_cache"
         self.site_configs_dir.mkdir(parents=True, exist_ok=True)
         self.pdf_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.web_cache_dir.mkdir(parents=True, exist_ok=True)
         self.runs_path = self.root / "runs.jsonl"
 
     def get_site_config(self, domain: str) -> dict | None:
@@ -57,6 +59,18 @@ class RunStore:
         path = self.pdf_cache_dir / f"{file_hash}.json"
         with path.open("w", encoding="utf-8") as cache_file:
             json.dump(parts, cache_file, indent=2)
+
+    def get_web_cache(self, domain: str) -> dict | None:
+        path = self.web_cache_dir / f"{_domain_key(domain)}.json"
+        if not path.exists():
+            return None
+        with path.open(encoding="utf-8") as cache_file:
+            return json.load(cache_file)
+
+    def save_web_cache(self, domain: str, payload: dict) -> None:
+        path = self.web_cache_dir / f"{_domain_key(domain)}.json"
+        with path.open("w", encoding="utf-8") as cache_file:
+            json.dump(payload, cache_file, indent=2)
 
     def record_run(self, record: dict) -> str:
         run_id = uuid4().hex

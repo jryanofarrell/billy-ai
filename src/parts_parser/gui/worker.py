@@ -4,13 +4,15 @@ from urllib.parse import urlparse
 
 from PySide6.QtCore import QObject, QThread, Signal
 
+from parts_parser.keepawake import keep_awake
 from parts_parser.llm import LLMError
 from parts_parser.output.excel import write_workbook
 from parts_parser.output.filtering import OutputError, load_filter_sheet
 from parts_parser.pdf.extract import PdfError
 from parts_parser.pdf.pipeline import run_pdf
 from parts_parser.store import RunStore
-from parts_parser.web.pipeline import run_web
+from parts_parser.web.generic import PartRecord as GenericPartRecord
+from parts_parser.web.pipeline import CachedDataInfo, run_web
 from parts_parser.web.session import WebError
 
 
@@ -30,8 +32,10 @@ def output_path_for(name: str) -> Path:
 
 class PipelineWorker(QThread):
     progressed = Signal(str, int)
-    succeeded = Signal(str, int)
+    succeeded = Signal(str, int, str)
     failed = Signal(str)
+    previewReady = Signal(list)
+    cacheDecision = Signal(object)
 
     def __init__(
         self,
@@ -46,44 +50,85 @@ class PipelineWorker(QThread):
         self._pdf_path = pdf_path
         self._filter_path = filter_path
         self._cancel = threading.Event()
+        self._preview_event = threading.Event()
+        self._preview_answer = False
+        self._cache_decision_event = threading.Event()
+        self._use_saved_cache = True
+        self._cached_data_info: CachedDataInfo | None = None
+        self._resuming_partial_cache = False
 
     def cancel(self) -> None:
+        self._preview_answer = False
+        self._preview_event.set()
+        self._use_saved_cache = True
+        self._cache_decision_event.set()
         self._cancel.set()
 
+    def answer_preview(self, accepted: bool) -> None:
+        self._preview_answer = accepted
+        self._preview_event.set()
+
+    def answer_cache_decision(self, use_saved: bool) -> None:
+        self._use_saved_cache = use_saved
+        self._cache_decision_event.set()
+
+    def _confirm(self, sample: list[GenericPartRecord]) -> bool:
+        self._preview_event.clear()
+        self.previewReady.emit(sample)
+        self._preview_event.wait()
+        return self._preview_answer
+
+    def _choose_cached(self, info: CachedDataInfo) -> bool:
+        self._cached_data_info = info
+        self._cache_decision_event.clear()
+        self.cacheDecision.emit(info)
+        self._cache_decision_event.wait()
+        self._resuming_partial_cache = self._use_saved_cache and not getattr(info, "complete", True)
+        return self._use_saved_cache
+
     def run(self) -> None:
-        try:
-            store = RunStore()
-            filter_sheet = (
-                load_filter_sheet(Path(self._filter_path))
-                if self._filter_path is not None
-                else None
-            )
+        with keep_awake():
+            try:
+                store = RunStore()
+                filter_sheet = (
+                    load_filter_sheet(Path(self._filter_path))
+                    if self._filter_path is not None
+                    else None
+                )
 
-            def report_progress(message: str, fraction: float) -> None:
-                percent = int(fraction * 100) if fraction >= 0 else -1
-                self.progressed.emit(message, percent)
+                def report_progress(message: str, fraction: float) -> None:
+                    percent = int(fraction * 100) if fraction >= 0 else -1
+                    self.progressed.emit(message, percent)
 
-            if self._url is not None:
-                result, output_path = self._run_web_job(store, filter_sheet, report_progress)
-                mode = "web"
-            elif self._pdf_path is not None:
-                result, output_path = self._run_pdf_job(store, filter_sheet, report_progress)
-                mode = "pdf"
-            else:
-                raise OutputError("Choose a website or PDF catalog to parse.")
+                if self._url is not None:
+                    result, output_path = self._run_web_job(store, filter_sheet, report_progress)
+                    mode = "web"
+                elif self._pdf_path is not None:
+                    result, output_path = self._run_pdf_job(store, filter_sheet, report_progress)
+                    mode = "pdf"
+                else:
+                    raise OutputError("Choose a website or PDF catalog to parse.")
 
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            write_workbook(
-                result.parts,
-                output_path,
-                mode=mode,
-                match_report=result.match_report,
-            )
-            self.succeeded.emit(str(output_path), len(result.parts))
-        except (WebError, PdfError, LLMError, OutputError) as error:
-            self.failed.emit(str(error))
-        except Exception as error:
-            self.failed.emit(f"Something went wrong ({type(error).__name__}). Please try again.")
+                if result.stopped_early and not result.parts:
+                    self.failed.emit(result.stopped_early)
+                    return
+
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                write_workbook(
+                    result.parts,
+                    output_path,
+                    mode=mode,
+                    match_report=result.match_report,
+                )
+                warnings = [result.stopped_early] if result.stopped_early else []
+                warnings.extend(getattr(result, "notices", []))
+                self.succeeded.emit(str(output_path), len(result.parts), "\n".join(warnings))
+            except (WebError, PdfError, LLMError, OutputError) as error:
+                self.failed.emit(str(error))
+            except Exception as error:
+                self.failed.emit(
+                    f"Something went wrong ({type(error).__name__}). Please try again."
+                )
 
     def _run_web_job(self, store, filter_sheet, progress):
         result = run_web(
@@ -92,7 +137,20 @@ class PipelineWorker(QThread):
             filter_sheet=filter_sheet,
             progress=progress,
             cancel=self._cancel,
+            confirm=self._confirm,
+            choose_cached=self._choose_cached,
         )
+        if self._resuming_partial_cache and self._cached_data_info is not None:
+            existing = self._cached_data_info.part_count
+            domain = urlparse(self._url).netloc.lower()
+            updated_cache = store.get_web_cache(domain)
+            updated_count = (
+                len(updated_cache["parts"]) if updated_cache is not None else len(result.parts)
+            )
+            added = max(0, updated_count - existing)
+            result.notices.append(
+                f"Topped up the saved data: added {added:,} parts to {existing:,} saved."
+            )
         return result, output_path_for(urlparse(self._url).netloc)
 
     def _run_pdf_job(self, store, filter_sheet, progress):
