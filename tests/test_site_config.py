@@ -91,5 +91,36 @@ def test_validate_schema_accepts_complete_generic_config():
     assert validate_schema(config) == []
 
 
+def test_validate_schema_accepts_sitemap_images_with_only_sitemap_url():
+    config = SiteConfig(
+        platform="generic",
+        selectors={"part_no": ".sku"},
+        enumeration={
+            "strategy": "sitemap_images",
+            "sitemap_url": "https://example.test/sitemap.xml",
+        },
+    )
+
+    assert validate_schema(config) == []
+
+
+@pytest.mark.parametrize("sitemap_url", [None, "", "   "])
+def test_validate_schema_rejects_sitemap_images_without_sitemap_url(sitemap_url):
+    enumeration = {"strategy": "sitemap_images"}
+    if sitemap_url is not None:
+        enumeration["sitemap_url"] = sitemap_url
+
+    problems = validate_schema(
+        SiteConfig(
+            platform="generic",
+            selectors={"part_no": ".sku"},
+            enumeration=enumeration,
+        )
+    )
+
+    assert len(problems) == 1
+    assert "enumeration.sitemap_url" in problems[0]
+
+
 def test_validate_schema_does_not_apply_generic_requirements_to_insite():
     assert validate_schema(SiteConfig(platform="insite")) == []

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+  <url><loc>https://example.test/catalog/alpha-100</loc><image:image><image:loc>https://example.test/images/alpha-100.png</image:loc></image:image></url>
+  <url><loc>https://example.test/category/valves</loc></url>
+  <url><loc>https://example.test/category/fittings</loc></url>
+  <url><loc>https://example.test/category/drains</loc></url>
+  <url><loc>https://example.test/catalog/beta-200</loc><image:image><image:loc>https://example.test/images/beta-200.png</image:loc></image:image></url>
+  <url><loc>https://example.test/category/tubing</loc></url>
+  <url><loc>https://example.test/category/tools</loc></url>
+  <url><loc>https://example.test/help/shipping</loc></url>
+  <url><loc>https://example.test/about</loc></url>
+  <url><loc>https://example.test/contact</loc></url>
+</urlset>

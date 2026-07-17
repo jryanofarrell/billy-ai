@@ -11,6 +11,7 @@ from parts_parser.web.generic import (
     iter_crawl_product_urls,
     iter_sitemap_product_urls,
     parse_product_page,
+    scan_sitemap,
 )
 from parts_parser.web.session import BrowserSession, WebError
 from parts_parser.web.site_config import SiteConfig, validate_schema
@@ -54,44 +55,67 @@ def discover_site_config(
     llm: LLMClient,
     base: str,
     progress: Callable[[str, float], None] = lambda m, f: None,
+    force_llm: bool = False,
 ) -> SiteConfig:
     progress("Checking for sitemap…", 0.1)
     sitemap_url = _find_sitemap(session, base)
 
-    sitemap_sample = ""
+    sitemap_scan = None
     if sitemap_url:
         try:
-            raw = session.get_text(sitemap_url)
-            sitemap_sample = raw[:2_000]
+            sitemap_scan = scan_sitemap(session, sitemap_url)
         except WebError:
             sitemap_url = None
 
-    progress("Reading home page…", 0.2)
-    home_html = _sample_html(session.get_html(base))
-
-    if sitemap_url:
-        sitemap_context = f"A sitemap exists at {sitemap_url}. Sample:\n{sitemap_sample}"
-    else:
-        sitemap_context = "No sitemap was found."
-
-    user_prompt_1 = (
-        f"Site: {base}. {sitemap_context}\n\n"
-        "Home page content follows.\n\n"
-        f"{home_html}\n\n"
-        'Return {"product_url_example": str, "product_url_pattern": str, '
-        '"category_link_pattern": str|null, "pagination_param": str|null, '
-        '"search_url_template": str|null, "strategy": "sitemap"|"category_crawl"}. '
-        "Rules: patterns are Python regexes matched against absolute URLs; "
-        '"product_url_example" must be a real product URL visible in the provided '
-        "content or sitemap; "
-        '"search_url_template" uses {query} as the placeholder; '
-        'choose "sitemap" only if a sitemap exists and product pages appear in it.'
+    image_tagged = sitemap_scan.image_tagged if sitemap_scan else []
+    other = sitemap_scan.other if sitemap_scan else []
+    total = len(image_tagged) + len(other)
+    use_sitemap_images = bool(
+        sitemap_url
+        and not force_llm
+        and image_tagged
+        and len(image_tagged) / total < 0.9
     )
 
-    progress("Analysing site structure…", 0.35)
-    call1 = llm.complete_json(system=_SYSTEM_URL_STRUCTURE, user=user_prompt_1)
+    call1: dict = {}
+    if use_sitemap_images:
+        product_url_example = image_tagged[0]
+    else:
+        progress("Reading home page…", 0.2)
+        home_html = _sample_html(session.get_html(base))
 
-    product_url_example: str = call1.get("product_url_example", "")
+        if sitemap_url and sitemap_scan:
+            if image_tagged:
+                image_samples = "\n".join(
+                    f"- {url} (includes a product image)" for url in image_tagged[:5]
+                )
+                other_samples = "\n".join(f"- {url} (no image)" for url in other[:5])
+                samples = "\n".join(part for part in (image_samples, other_samples) if part)
+            else:
+                step = max(1, len(other) // 15)
+                samples = "\n".join(f"- {url}" for url in other[::step][:15])
+            sitemap_context = f"A sitemap exists at {sitemap_url}. Sample URLs:\n{samples}"
+        else:
+            sitemap_context = "No sitemap was found."
+
+        user_prompt_1 = (
+            f"Site: {base}. {sitemap_context}\n\n"
+            "Home page content follows.\n\n"
+            f"{home_html}\n\n"
+            'Return {"product_url_example": str, "product_url_pattern": str, '
+            '"category_link_pattern": str|null, "pagination_param": str|null, '
+            '"search_url_template": str|null, "strategy": "sitemap"|"category_crawl"}. '
+            "Rules: patterns are Python regexes matched against absolute URLs; "
+            '"product_url_example" must be a real product URL visible in the provided '
+            "content or sitemap; "
+            '"search_url_template" uses {query} as the placeholder; '
+            'choose "sitemap" only if a sitemap exists and product pages appear in it.'
+        )
+
+        progress("Analysing site structure…", 0.35)
+        call1 = llm.complete_json(system=_SYSTEM_URL_STRUCTURE, user=user_prompt_1)
+        product_url_example = call1.get("product_url_example", "")
+
     progress("Fetching a sample product page…", 0.5)
     try:
         product_html = _sample_html(session.get_html(product_url_example))
@@ -113,9 +137,13 @@ def discover_site_config(
     progress("Identifying page selectors…", 0.65)
     call2 = llm.complete_json(system=_SYSTEM_SELECTORS, user=user_prompt_2)
 
-    strategy = call1.get("strategy", "category_crawl")
     enumeration: dict
-    if strategy == "sitemap" and sitemap_url:
+    if use_sitemap_images:
+        enumeration = {
+            "strategy": "sitemap_images",
+            "sitemap_url": sitemap_url,
+        }
+    elif call1.get("strategy", "category_crawl") == "sitemap" and sitemap_url:
         enumeration = {
             "strategy": "sitemap",
             "sitemap_url": sitemap_url,
@@ -136,7 +164,7 @@ def discover_site_config(
         platform="generic",
         enumeration=enumeration,
         selectors=call2,
-        search_url_template=call1.get("search_url_template"),
+        search_url_template=None if use_sitemap_images else call1.get("search_url_template"),
     )
 
     problems = validate_schema(config)

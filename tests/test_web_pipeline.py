@@ -836,7 +836,7 @@ def test_resolve_site_config_retries_failed_gate_once_then_raises(tmp_path, monk
     monkeypatch.setattr(
         pipeline_module,
         "discover_site_config",
-        lambda *args: discoveries.append(args) or _generic_config(),
+        lambda *args, **kwargs: discoveries.append((args, kwargs)) or _generic_config(),
     )
     monkeypatch.setattr(
         pipeline_module,
@@ -856,6 +856,8 @@ def test_resolve_site_config_retries_failed_gate_once_then_raises(tmp_path, monk
         )
 
     assert len(discoveries) == 2
+    assert discoveries[0][1] == {}
+    assert discoveries[1][1] == {"force_llm": True}
 
 
 def test_resolve_site_config_declined_preview_does_not_cache(tmp_path, monkeypatch):
