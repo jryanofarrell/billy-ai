@@ -11,3 +11,4 @@
 - [BIL-13 (2026-07-16)](bil-13_2026-07-16.md) — factory run, PR: (pending)
 - [BIL-12 (2026-07-16)](bil-12_2026-07-16.md) — factory run, PR: (pending)
 - [BIL-14 (2026-07-16)](bil-14_2026-07-16.md) — factory run, PR: (pending)
+- [BIL-15 (2026-07-17)](bil-15_2026-07-17.md) — factory run, PR: (pending)

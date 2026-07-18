@@ -16,6 +16,7 @@ PDF_COLUMNS = [
     "Series",
     "Size",
     "Sequence",
+    "Page",
 ]
 WEB_FIXED_COLUMNS = ["Part No", "Category", "Subcategory", "Series", "Size"]
 
@@ -38,6 +39,7 @@ def _write_pdf_parts_sheet(worksheet: Worksheet, parts: list[PartRecord]) -> Non
             part.series,
             part.description,
             part.sequence,
+            part.page_number,
         ]
         for column, value in enumerate(values, start=1):
             worksheet.cell(row=row, column=column, value=value)

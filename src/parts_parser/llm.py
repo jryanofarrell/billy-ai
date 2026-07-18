@@ -11,7 +11,14 @@ class LLMError(Exception):
 
 
 class LLMClient(Protocol):
-    def complete_json(self, *, system: str, user: str, max_output_tokens: int = 4096) -> dict:
+    def complete_json(
+        self,
+        *,
+        system: str,
+        user: str,
+        max_output_tokens: int = 4096,
+        reasoning_effort: str | None = None,
+    ) -> dict:
         """Return a JSON object produced from the supplied prompts."""
         ...
 
@@ -21,17 +28,28 @@ class OpenAIClient:
         self._client = openai.OpenAI(api_key=api_key)
         self._model = model
 
-    def complete_json(self, *, system: str, user: str, max_output_tokens: int = 4096) -> dict:
+    def complete_json(
+        self,
+        *,
+        system: str,
+        user: str,
+        max_output_tokens: int = 4096,
+        reasoning_effort: str | None = None,
+    ) -> dict:
+        request = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "response_format": {"type": "json_object"},
+            "max_completion_tokens": max_output_tokens,
+        }
+        if reasoning_effort is not None:
+            request["reasoning_effort"] = reasoning_effort
+
         try:
-            response = self._client.chat.completions.create(
-                model=self._model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                response_format={"type": "json_object"},
-                max_completion_tokens=max_output_tokens,
-            )
+            response = self._client.chat.completions.create(**request)
         except openai.OpenAIError as error:
             raise LLMError(
                 "Couldn't reach the AI service. Check your internet connection "

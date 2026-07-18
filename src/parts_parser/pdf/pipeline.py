@@ -8,8 +8,8 @@ from pathlib import Path
 from parts_parser.llm import LLMClient, LLMError, get_client
 from parts_parser.models import PartRecord
 from parts_parser.output.filtering import FilterSheet, MatchReport, match_parts
-from parts_parser.pdf.extract import PdfError, extract_text, is_digital
-from parts_parser.pdf.pages import PageResult, extract_page_parts
+from parts_parser.pdf.extract import PdfError, extract_pages, is_digital
+from parts_parser.pdf.pages import PageResult, extract_page_parts, extract_suspicious_lines
 from parts_parser.pdf.tables import parse_page_tables
 from parts_parser.pdf.toc import find_toc_pages, parse_toc, section_for_page
 from parts_parser.pdf.validate import validate_parts
@@ -49,32 +49,32 @@ def run_pdf(
         parts = [PartRecord(**d) for d in cached["parts"]]
         validation = cached["validation"]
     else:
-        pages = extract_text(path)
+        pages = extract_pages(path)
+        bodies = [page.body for page in pages]
 
-        if not is_digital(pages):
+        if not is_digital(bodies):
             raise PdfError(
                 "This PDF looks like scanned images, not text. "
                 "Scanned catalogs aren't supported yet."
             )
 
-        toc_idx = find_toc_pages(pages)
+        toc_idx = find_toc_pages(bodies)
         if toc_idx:
             llm = llm or get_client()
-            sections = parse_toc(llm, "\n".join(pages[i] for i in toc_idx), len(pages))
+            sections = parse_toc(llm, "\n".join(bodies[i] for i in toc_idx), len(bodies))
         else:
             sections = []
 
         page_results: list[PageResult] = []
-        page_counts = {"deterministic": 0, "ai": 0, "blank": 0}
         current_page = 1
         try:
-            for i, text in enumerate(pages):
+            for i, page in enumerate(pages):
+                text = page.body
                 current_page = i + 1
                 if cancel is not None and cancel.is_set():
                     raise _Cancelled
                 progress(f"Reading page {current_page} of {len(pages)}…", i / len(pages))
                 if len("".join(text.split())) < 40:
-                    page_counts["blank"] += 1
                     logger.debug("page %d/%d: skipped (blank)", current_page, len(pages))
                     page_results.append(
                         PageResult(
@@ -83,20 +83,30 @@ def run_pdf(
                             parts=[],
                             skipped=True,
                             skip_reason="blank",
+                            page_number=page.page_number,
                         )
                     )
                     continue
                 section = section_for_page(sections, current_page)
                 category = section.category if section is not None else ""
-                det_parts, reasons = parse_page_tables(text)
-                if reasons:
-                    page_counts["ai"] += 1
+                page_title = page.heading
+                scan = parse_page_tables(text)
+                suspicious_count = len(scan.suspicious)
+                fallback_reasons = list(dict.fromkeys(line.reason for line in scan.suspicious))
+                use_page_ai = (not scan.parts and scan.word_count >= 40) or (
+                    suspicious_count >= 3
+                    and suspicious_count / (len(scan.parts) + suspicious_count) >= 0.2
+                )
+
+                if use_page_ai:
+                    if not fallback_reasons:
+                        fallback_reasons = ["substantial page text produced no parts"]
                     logger.info(
-                        "page %d/%d: AI fallback — %s (deterministic pass found %d parts)",
+                        "page %d/%d: AI page fallback — %s (deterministic pass found %d parts)",
                         current_page,
                         len(pages),
-                        "; ".join(reasons),
-                        len(det_parts),
+                        "; ".join(fallback_reasons),
+                        len(scan.parts),
                     )
                     progress(
                         f"Reading page {current_page} of {len(pages)} (AI)…",
@@ -104,25 +114,60 @@ def run_pdf(
                     )
                     llm = llm or get_client()
                     page_result = extract_page_parts(llm, text, current_page, category)
+                    page_result.ai_mode = "page"
+                    page_result.fallback_reasons = fallback_reasons
+                elif suspicious_count:
+                    line_reasons = [
+                        f"line {line.line_no}: {line.reason}" for line in scan.suspicious
+                    ]
+                    logger.info(
+                        "page %d/%d: AI lines fallback — %s (deterministic pass found %d parts)",
+                        current_page,
+                        len(pages),
+                        "; ".join(line_reasons),
+                        len(scan.parts),
+                    )
+                    progress(
+                        f"Reading page {current_page} of {len(pages)} (AI)…",
+                        i / len(pages),
+                    )
+                    llm = llm or get_client()
+                    extra = extract_suspicious_lines(
+                        llm,
+                        current_page,
+                        category,
+                        page_title,
+                        scan.header_line,
+                        scan.suspicious,
+                    )
+                    positioned_parts = list(zip(scan.part_lines, scan.parts))
+                    positioned_parts.extend(extra)
+                    positioned_parts.sort(key=lambda item: item[0])
+                    merged_parts = [part for _, part in positioned_parts]
+                    page_result = PageResult(
+                        page_no=current_page,
+                        subcategory=page_title,
+                        parts=merged_parts,
+                        skipped=not merged_parts,
+                        skip_reason=None,
+                        ai_mode="lines",
+                        fallback_reasons=line_reasons,
+                    )
                 else:
-                    page_counts["deterministic"] += 1
                     logger.debug(
                         "page %d/%d: deterministic, %d parts",
                         current_page,
                         len(pages),
-                        len(det_parts),
-                    )
-                    page_title = next(
-                        (line.strip() for line in text.splitlines() if line.strip()),
-                        "",
+                        len(scan.parts),
                     )
                     page_result = PageResult(
                         page_no=current_page,
                         subcategory=page_title,
-                        parts=det_parts,
-                        skipped=not det_parts,
+                        parts=scan.parts,
+                        skipped=not scan.parts,
                         skip_reason=None,
                     )
+                page_result.page_number = page.page_number
                 page_results.append(page_result)
         except _Cancelled:
             stopped_early = f"Cancelled on page {current_page} of {len(pages)}."
@@ -131,15 +176,16 @@ def run_pdf(
                 raise
             stopped_early = f"Stopped on page {current_page} of {len(pages)} ({error})."
 
+        parts, report = validate_parts(page_results, bodies, sections)
         logger.info(
-            "%s: %d pages — %d deterministic, %d AI fallback, %d blank",
+            "%s: %d pages — %d deterministic, %d AI page, %d AI lines, %d blank",
             path.name,
             len(pages),
-            page_counts["deterministic"],
-            page_counts["ai"],
-            page_counts["blank"],
+            report.pages_deterministic,
+            report.pages_ai_page,
+            report.pages_ai_lines,
+            report.pages_blank,
         )
-        parts, report = validate_parts(page_results, pages, sections)
         validation = dataclasses.asdict(report)
         store.save_pdf_cache(
             file_hash,

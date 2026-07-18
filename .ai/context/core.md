@@ -16,7 +16,7 @@ provider-agnostic LLM boundary, and local persistent run state.
 | `src/parts_parser/pdf/extract.py` | Extracts per-page text from a PDF via `pypdf`; classifies pages as digital or scanned. |
 | `src/parts_parser/pdf/toc.py` | Detects TOC pages by dotted-leader density and parses them into ordered sections via one `complete_json` call. Prompt lives here. |
 | `src/parts_parser/pdf/pages.py` | Sends the per-page extraction prompt and returns parts/subcategory/skip for each page. Prompt lives here. |
-| `src/parts_parser/pdf/tables.py` | Deterministically extracts regular PDF table rows into verbatim `RawPart` records and reports page-level reasons to use the AI fallback. |
+| `src/parts_parser/pdf/tables.py` | Deterministically scans PDF tables into a `PageScan` containing verbatim `RawPart` records, source positions, suspicious lines, header context, and word count. |
 | `src/parts_parser/pdf/validate.py` | Drops parts whose number isn't found in the page text, deduplicates, assigns sequence, and reports totals/drops/dupes. |
 | `src/parts_parser/pdf/pipeline.py` | Orchestrates the full PDF run: cache lookup, extraction, TOC parse, deterministic per-page table parsing with triggered AI fallback, validation, filter matching, and `record_run`. |
 | `src/parts_parser/web/` | Provides the throttled Playwright browser session, Insite/Optimizely API adapter, and filter-or-crawl web pipeline. |
@@ -37,24 +37,43 @@ tables with all size columns before `PART No.` use those preceding labels; and a
 part-only row gets an empty description. Mirrored headers containing two
 `PART No.` columns emit both sides of each row.
 
-The part-code test requires at least one digit and either a hyphen or a letter,
-while rejecting values that are entirely simple or mixed-number fractions. It
-therefore accepts shapes such as `1460-4`, `S3749-2A`, and `GO9-72`, but rejects
-`3/8`, `.122`, and `1-1/4`. Accepted part numbers are stored exactly as they
-appear in the page text.
+The ordinary part-code test requires at least one digit and either a hyphen or
+a letter, while rejecting values that are entirely simple or mixed-number
+fractions. It therefore accepts shapes such as `1460-4`, `S3749-2A`, and
+`GO9-72`, but rejects `3/8`, `.122`, and `1-1/4`. Once a `PART No.` header has
+established the expected code column, that position also accepts a numeric code
+of at least two digits with an optional trailing `*` or `†`; this permits codes
+such as `2368*` without treating similarly shaped text elsewhere as a part.
+Every accepted part number is stored character-for-character as printed.
 
-A page uses AI extraction only when deterministic parsing reports one or more
-fallback triggers:
+`parse_page_tables()` returns a `PageScan`: deterministic parts and their
+one-based source line numbers, suspicious lines with their line number, text,
+reason, and nearby headings, the most recent part-number header line, and the
+page's whitespace-delimited word count. The pipeline makes one of four page
+decisions:
 
-- adjacent tokens may form a spaced part number;
-- a table-like row has an unrecognized part-number shape;
-- a page with at least 40 whitespace-delimited tokens produces no parts.
+- text with fewer than 40 non-whitespace characters is blank and skipped;
+- whole-page AI is used when a scan has no parts and at least 40 words, or when
+  there are at least three suspicious lines and they are at least 20% of
+  `deterministic parts + suspicious lines`;
+- otherwise, one or more suspicious lines use a single line-mode AI call while
+  retaining deterministic parts;
+- every remaining nonblank page uses its deterministic scan result, including
+  an empty result for a short page with no recognized parts.
 
-`pdf/pipeline.py` logs every fallback decision to the `parts_parser` logger:
-one INFO line per AI-fallback page with its trigger reasons and the
-deterministic part count, DEBUG lines for deterministic and blank pages, and an
-end-of-run INFO summary of page counts. `logging_setup.setup_logging()`, called
-from `__main__`, writes the package logger to a rotating file at
+Line mode bundles every suspicious line into one numbered request together
+with the page number, category, page title/subcategory, table header, and each
+line's nearby headings. AI-recovered parts are associated with the returned
+source line number, then merged with deterministic parts in page-line order.
+Both whole-page and line-mode extraction calls set
+`reasoning_effort="minimal"`; the TOC call does not set reasoning effort.
+
+Each decision is recorded on `PageResult` (`ai_mode` and fallback reasons), and
+validation derives `pages_deterministic`, `pages_ai_page`, `pages_ai_lines`, and
+`pages_blank` from those results. Pipeline logging, including its end-of-run
+page counts, is rendered from `PageResult` and validation-report data rather
+than maintained as separate decision state. `logging_setup.setup_logging()`,
+called from `__main__`, writes the package logger to a rotating file at
 `<app-data>/logs/parts_parser.log`.
 
 ## Insite endpoint facts
