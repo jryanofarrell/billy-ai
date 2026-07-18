@@ -11,12 +11,12 @@ from parts_parser.output.filtering import MatchReport
 
 PDF_COLUMNS = [
     "Part No",
-    "Page",
     "Category",
     "Subcategory",
     "Series",
     "Size",
     "Sequence",
+    "Page",
 ]
 WEB_FIXED_COLUMNS = ["Part No", "Category", "Subcategory", "Series", "Size"]
 
@@ -34,12 +34,12 @@ def _write_pdf_parts_sheet(worksheet: Worksheet, parts: list[PartRecord]) -> Non
     for row, part in enumerate(parts, start=2):
         values: list[str | int | None] = [
             part.part_no,
-            part.page_number,
             part.category,
             part.subcategory,
             part.series,
             part.description,
             part.sequence,
+            part.page_number,
         ]
         for column, value in enumerate(values, start=1):
             worksheet.cell(row=row, column=column, value=value)

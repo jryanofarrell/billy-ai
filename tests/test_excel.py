@@ -27,7 +27,7 @@ def test_write_workbook_pdf_has_exact_headers_and_preserves_part_number(tmp_path
         assert [cell.value for cell in worksheet[1]] == PDF_COLUMNS
         assert worksheet["A2"].value == "007345"
         assert isinstance(worksheet["A2"].value, str)
-        assert worksheet["B2"].value == "42"  # catalog page number
+        assert worksheet["G2"].value == "42"  # catalog page number (last column)
         assert workbook.sheetnames == ["Parts"]
     finally:
         workbook.close()
