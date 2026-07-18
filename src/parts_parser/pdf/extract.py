@@ -88,8 +88,16 @@ def _column_of(x: float, anchors: list[float], tolerance: float = 20.0) -> int:
 
 
 def _line_of(row_words: list[dict]) -> str:
+    """Join a row's words, marking real column gaps with a double space so the
+    table parser can tell a multi-word column label (``Hex Size``) from two
+    separate columns. Word spaces within a cell run ~2pt; column gaps run 30pt+.
+    """
     row_words.sort(key=lambda w: w["x0"])
-    return " ".join(w["text"] for w in row_words)
+    text = row_words[0]["text"]
+    for previous, current in zip(row_words, row_words[1:]):
+        separator = "  " if current["x0"] - previous["x1"] > 12 else " "
+        text += separator + current["text"]
+    return text
 
 
 def _split_title(words: list[dict]) -> tuple[str, list[dict]]:

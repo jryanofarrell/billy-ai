@@ -203,8 +203,13 @@ def parse_page_tables(text: str) -> PageScan:
             seen_header = True
             mirrored = len(matches) >= 2
             sections = PARTNO.split(line)
-            before_labels = _labels(sections[0]) if sections[0].strip() else []
-            after_labels = _labels(sections[1]) if len(sections) > 1 else []
+            new_before = _labels(sections[0]) if sections[0].strip() else []
+            new_after = _labels(sections[1]) if len(sections) > 1 and sections[1].strip() else []
+            # A bare "Part No." sub-header (Lead Free, Forged Nuts) carries no
+            # labels; the sub-block reuses the parent block's columns, so keep the
+            # existing labels rather than clearing them.
+            if new_before or new_after:
+                before_labels, after_labels = new_before, new_after
             continue
 
         tokens = line.split()
