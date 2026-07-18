@@ -83,6 +83,7 @@ def run_pdf(
                             parts=[],
                             skipped=True,
                             skip_reason="blank",
+                            page_number=page.page_number,
                         )
                     )
                     continue
@@ -166,6 +167,7 @@ def run_pdf(
                         skipped=not scan.parts,
                         skip_reason=None,
                     )
+                page_result.page_number = page.page_number
                 page_results.append(page_result)
         except _Cancelled:
             stopped_early = f"Cancelled on page {current_page} of {len(pages)}."

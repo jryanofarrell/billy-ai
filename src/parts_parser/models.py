@@ -8,5 +8,6 @@ class PartRecord:
     subcategory: str = ""
     series: str = ""
     description: str = ""
+    page_number: str = ""
     sequence: int | None = None
     attributes: dict[str, str] = field(default_factory=dict)

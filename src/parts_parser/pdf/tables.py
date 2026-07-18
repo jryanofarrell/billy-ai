@@ -137,6 +137,11 @@ def _is_heading(line: str, tokens: list[str]) -> bool:
         return False
     if line.strip().isdigit():
         return False
+    # Catalog headings start with a capital (or a digit, e.g. 90° ELBOW); a line
+    # whose first letter is lowercase is wrapped prose, not a heading.
+    first_alpha = next((char for char in line if char.isalpha()), "")
+    if first_alpha.islower():
+        return False
     if any(is_code(token) for token in tokens):
         return False
     if all(_SIZE.fullmatch(token) or _QTY.fullmatch(token) for token in tokens):
@@ -181,6 +186,7 @@ def parse_page_tables(text: str) -> PageScan:
     before_labels: list[str] = []
     after_labels: list[str] = []
     mirrored = False
+    seen_header = False  # a PART No. header has appeared, even a bare "Part No."
     pending: list[str] = []  # contiguous heading lines not yet applied to a row
     primary = ""  # last full (non-variant) block heading
     current_series = ""  # series applied to rows until the next heading run
@@ -194,6 +200,7 @@ def parse_page_tables(text: str) -> PageScan:
         matches = list(PARTNO.finditer(line))
         if matches:
             header_line = raw_line
+            seen_header = True
             mirrored = len(matches) >= 2
             sections = PARTNO.split(line)
             before_labels = _labels(sections[0]) if sections[0].strip() else []
@@ -222,7 +229,11 @@ def parse_page_tables(text: str) -> PageScan:
                 suspicious_reason = "possible spaced part number"
 
         code_positions = [index for index, token in enumerate(tokens) if is_code(token)]
-        header_seen = bool(before_labels or after_labels or mirrored)
+        # A bare "Part No." sub-header (Lead Free, Forged Nuts) carries no column
+        # labels; gate emission on having seen any header, not on label presence,
+        # so those rows are extracted instead of dropped (which also stops their
+        # heading from bleeding onto the next block).
+        header_seen = seen_header
         if (
             header_seen
             and expected_code_position < len(tokens)

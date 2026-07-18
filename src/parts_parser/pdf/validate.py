@@ -56,6 +56,7 @@ def validate_parts(
                     subcategory=result.subcategory,
                     series=raw.series,
                     description=raw.description,
+                    page_number=result.page_number,
                 )
             )
 

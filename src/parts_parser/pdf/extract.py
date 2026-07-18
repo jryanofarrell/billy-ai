@@ -26,6 +26,20 @@ class PageText:
 
     heading: str  # page-level title (e.g. "BRASS S.A.E. 45° FLARE"), "" if none
     body: str  # column-ordered table text; page number and title removed
+    page_number: str = ""  # the printed catalog page number, "" if none found
+
+
+def _page_number(words: list[dict], width: float, height: float) -> str:
+    """The printed catalog page number: a bare integer in a bottom outer corner."""
+    for word in words:
+        text = word["text"]
+        if (
+            text.isdigit()
+            and word["top"] > height - 22
+            and (word["x0"] < 55 or word["x0"] > width - 58)
+        ):
+            return text
+    return ""
 
 
 def _row_key(top: float) -> int:
@@ -105,9 +119,10 @@ def _page_text(page) -> PageText:
     if not words:
         return PageText(heading="", body="")
 
+    page_number = _page_number(words, float(page.width), float(page.height))
     heading, body_words = _split_title(words)
     if not body_words:
-        return PageText(heading=heading, body="")
+        return PageText(heading=heading, body="", page_number=page_number)
 
     anchors = _column_anchors(body_words)
 
@@ -122,7 +137,7 @@ def _page_text(page) -> PageText:
         for row_key in sorted(per_column[column_index]):
             ordered.append(_line_of(per_column[column_index][row_key]))
 
-    return PageText(heading=heading, body="\n".join(ordered))
+    return PageText(heading=heading, body="\n".join(ordered), page_number=page_number)
 
 
 def extract_pages(path: Path) -> list[PageText]:

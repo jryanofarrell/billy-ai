@@ -11,6 +11,7 @@ from parts_parser.output.filtering import MatchReport
 
 PDF_COLUMNS = [
     "Part No",
+    "Page",
     "Category",
     "Subcategory",
     "Series",
@@ -33,6 +34,7 @@ def _write_pdf_parts_sheet(worksheet: Worksheet, parts: list[PartRecord]) -> Non
     for row, part in enumerate(parts, start=2):
         values: list[str | int | None] = [
             part.part_no,
+            part.page_number,
             part.category,
             part.subcategory,
             part.series,

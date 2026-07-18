@@ -238,3 +238,37 @@ BI-100-B  1/4
 """
     scan = parse_page_tables(text)
     assert [p.series for p in scan.parts] == ["ELBOW", "ELBOW"]
+
+
+def test_bare_part_no_subheader_still_emits_parts_without_bleeding_heading():
+    text = """FORGED NUT
+Short Standard Type
+PART No.  Hex Size  Tube
+40-8  15/16  1/2
+Lead Free
+Part No.
+LF-40-12  1-5/16  3/4
+MILLED NUT
+Short Type
+PART No.  Length  Tube
+41S-3  5/8  3/16
+"""
+    scan = parse_page_tables(text)
+    by_no = {p.part_no: p for p in scan.parts}
+    assert "LF-40-12" in by_no
+    assert by_no["LF-40-12"].series == "FORGED NUT Short Standard Type / Lead Free"
+    assert by_no["41S-3"].series == "MILLED NUT Short Type"
+
+
+def test_wrapped_lowercase_prose_is_not_a_heading():
+    text = """water systems that have a weighted
+average lead content less than or
+equal to 0.25%.
+UNION
+COUPLING
+Tube to Tube
+PART No.  Tube
+42-2  1/8
+"""
+    scan = parse_page_tables(text)
+    assert scan.parts[0].series == "UNION COUPLING Tube to Tube"

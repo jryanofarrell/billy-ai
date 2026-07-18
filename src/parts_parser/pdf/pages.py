@@ -20,6 +20,7 @@ class PageResult:
     skip_reason: str | None
     ai_mode: str | None = None
     fallback_reasons: list[str] = field(default_factory=list)
+    page_number: str = ""  # printed catalog page number
 
 
 _SYSTEM = (
